@@ -9,12 +9,17 @@ from .embeddings import get_embedding
 
 load_dotenv()
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL")
+OPENROUTER_CHAT_MODEL = os.getenv("OPENROUTER_CHAT_MODEL")
 
 client = OpenAI(
-    base_url=f"{OLLAMA_BASE_URL}/v1",
-    api_key="ollama",
+    base_url=OPENROUTER_BASE_URL,
+    api_key=OPENROUTER_API_KEY,
+    default_headers={
+        "HTTP-Referer": "http://localhost:8000",
+        "X-OpenRouter-Title": "rag-project",
+    },
 )
 
 
@@ -128,7 +133,7 @@ def ask_question(question: str, top_k: int = 3) -> dict[str, Any]:
     ]
 
     response = client.chat.completions.create(
-        model=OLLAMA_CHAT_MODEL,
+        model=OPENROUTER_CHAT_MODEL,
         messages=messages,
         temperature=0.0,
     )
