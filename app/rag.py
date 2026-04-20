@@ -286,7 +286,7 @@ def ingest_pdf(
         "chunks_added": inserted_count,
     }
 
-def retrieve_context(question: str, top_k: int = 3) -> dict[str, Any]:
+def retrieve_context(question: str, top_k: int = 3, source: str | None = None) -> dict[str, Any]:
     total_start = perf_counter()
 
     if count_documents() == 0:
@@ -297,7 +297,11 @@ def retrieve_context(question: str, top_k: int = 3) -> dict[str, Any]:
     question_embed_ms = (perf_counter() - t0) * 1000
 
     t1 = perf_counter()
-    raw_matches = search_similar(question_embedding, limit=max(top_k * 4, 10))
+    raw_matches = search_similar(
+        question_embedding,
+        limit=max(top_k * 4, 10),
+        source=source,
+    )
     search_ms = (perf_counter() - t1) * 1000
 
     t2 = perf_counter()
@@ -342,7 +346,8 @@ def retrieve_context(question: str, top_k: int = 3) -> dict[str, Any]:
         "context": "\n\n---\n\n".join(context_parts),
     }
 
-def ask_question(question: str, top_k: int = 3) -> dict[str, Any]:
+def ask_question(question: str, top_k: int = 3, source: str | None = None) -> dict[str, Any]:
+    retrieved = retrieve_context(question, top_k=top_k, source=source)
     total_start = perf_counter()
 
     t0 = perf_counter()

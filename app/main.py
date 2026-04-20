@@ -2,11 +2,12 @@ from pathlib import Path
 import logging
 from logging.handlers import RotatingFileHandler
 from time import perf_counter
-
+from datetime import datetime
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .db import count_documents, delete_by_source, init_db, list_documents
+from .db import count_documents, delete_by_source, init_db, list_documents, list_sources
 from .rag import ask_question, ingest_pdf, normalize_source
 
 
@@ -74,15 +75,16 @@ async def log_request_timing(request: Request, call_next):
 class AskRequest(BaseModel):
     question: str = Field(..., description="Kullanıcı sorusu")
     top_k: int = Field(3, ge=1, le=10)
+    source: str | None = Field(None, description="Sadece belirli bir source içinde ara")
 
 
 class PdfIngestRequest(BaseModel):
-    source: str = Field(..., description="Kaynak adı, örn: water_main_breaks")
+    source: str | None = Field(None, description="Kaynak adı, boş bırakılırsa otomatik üretilir")
     pdf_path: str = Field(..., description="PDF dosya yolu")
     chunk_size: int = Field(1200, ge=200, le=5000)
     overlap: int = Field(200, ge=0, le=1000)
     replace_existing: bool = Field(
-        True,
+        False,
         description="Aynı source varsa önce eski kayıtları sil",
     )
 
@@ -134,10 +136,21 @@ def ask(payload: AskRequest):
         return ask_question(
             question=payload.question,
             top_k=payload.top_k,
+            source=payload.source,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/sources")
+def get_sources():
+    try:
+        items = list_sources()
+        return {
+            "count": len(items),
+            "items": items,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 
 
 @app.post("/ingest-pdf")
 def ingest_pdf_endpoint(payload: PdfIngestRequest):
@@ -150,7 +163,11 @@ def ingest_pdf_endpoint(payload: PdfIngestRequest):
                 detail=f"PDF bulunamadı: {payload.pdf_path}",
             )
 
-        normalized_source = normalize_source(payload.source, payload.pdf_path)
+        raw_source = payload.source.strip() if payload.source else ""
+        if not raw_source:
+            raw_source = f"{Path(payload.pdf_path).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        normalized_source = normalize_source(raw_source, payload.pdf_path)
 
         deleted_existing = 0
         if payload.replace_existing:

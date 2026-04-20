@@ -147,8 +147,11 @@ def insert_documents_batch(items: list[dict[str, Any]]) -> None:
         (perf_counter() - start) * 1000,
     )   
     
-def search_similar(query_embedding: list[float], limit: int = 3) -> list[dict[str, Any]]:
+def search_similar(query_embedding: list[float], limit: int = 3, source: str | None = None) -> list[dict[str, Any]]:
     embedding_str = vector_to_pgvector_str(query_embedding)
+
+    if source:
+        source = normalize_source(source)
 
     sql = """
     SELECT
@@ -200,7 +203,18 @@ def list_documents(limit: int = 100) -> list[dict[str, Any]]:
             cur.execute(sql, (limit,))
             rows = cur.fetchall()
             return [dict(row) for row in rows]
+def list_sources() -> list[str]:
+    sql = """
+    SELECT DISTINCT source
+    FROM documents
+    ORDER BY source;
+    """
 
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return [row[0] for row in rows]
 
 def count_documents() -> int:
     sql = "SELECT COUNT(*) FROM documents;"
