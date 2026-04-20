@@ -1,17 +1,75 @@
 from pathlib import Path
+import logging
+from logging.handlers import RotatingFileHandler
+from time import perf_counter
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .db import count_documents, delete_by_source, init_db, list_documents
 from .rag import ask_question, ingest_pdf, normalize_source
 
+
+def configure_logging() -> None:
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    )
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # aynı handler'ları iki kere eklememek için
+    if not root.handlers:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        root.addHandler(console_handler)
+
+        file_handler = RotatingFileHandler(
+            log_dir / "app.log",
+            maxBytes=2_000_000,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
+
+configure_logging()
+logger = logging.getLogger("rag.api")
+
 app = FastAPI(
     title="Local RAG API",
-    version="2.1.0",
+    version="2.2.0",
     description="PDF tabanlı RAG API (OpenRouter/Ollama + pgvector + FastAPI)",
 )
 
+@app.middleware("http")
+async def log_request_timing(request: Request, call_next):
+    start = perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = (perf_counter() - start) * 1000
+        logger.info(
+            "%s %s -> %s in %.1f ms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+        response.headers["X-Process-Time-Ms"] = f"{duration_ms:.1f}"
+        return response
+    except Exception:
+        duration_ms = (perf_counter() - start) * 1000
+        logger.exception(
+            "%s %s failed in %.1f ms",
+            request.method,
+            request.url.path,
+            duration_ms,
+        )
+        raise
 
 class AskRequest(BaseModel):
     question: str = Field(..., description="Kullanıcı sorusu")

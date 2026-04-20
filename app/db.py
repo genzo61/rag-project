@@ -1,11 +1,14 @@
 import os
+import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 from dotenv import load_dotenv
 
+logger = logging.getLogger("rag.db")
 load_dotenv()
 
 DB_HOST = os.getenv("DB_HOST")
@@ -57,12 +60,19 @@ def init_db() -> None:
 
     CREATE INDEX IF NOT EXISTS idx_documents_source
     ON documents (source);
+
+    CREATE INDEX IF NOT EXISTS idx_documents_embedding_hnsw
+    ON documents
+    USING hnsw (embedding vector_cosine_ops);
     """
 
+    start = perf_counter()
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(create_table_sql)
         conn.commit()
+
+    logger.info("init_db completed in %.1f ms", (perf_counter() - start) * 1000)
 
 
 def insert_document(
@@ -93,7 +103,50 @@ def insert_document(
             )
         conn.commit()
 
+def insert_documents_batch(items: list[dict[str, Any]]) -> None:
+    if not items:
+        return
 
+    rows = []
+    for item in items:
+        rows.append(
+            (
+                normalize_source(item["source"]),
+                item["page_start"],
+                item["page_end"],
+                item["chunk_index"],
+                item["content"],
+                vector_to_pgvector_str(item["embedding"]),
+            )
+        )
+
+    sql = """
+    INSERT INTO documents (source, page_start, page_end, chunk_index, content, embedding)
+    VALUES %s
+    ON CONFLICT (source, page_start, page_end, chunk_index)
+    DO UPDATE SET
+        content = EXCLUDED.content,
+        embedding = EXCLUDED.embedding;
+    """
+
+    start = perf_counter()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                sql,
+                rows,
+                template="(%s, %s, %s, %s, %s, %s::vector)",
+                page_size=100,
+            )
+        conn.commit()
+
+    logger.info(
+        "insert_documents_batch inserted=%d in %.1f ms",
+        len(rows),
+        (perf_counter() - start) * 1000,
+    )   
+    
 def search_similar(query_embedding: list[float], limit: int = 3) -> list[dict[str, Any]]:
     embedding_str = vector_to_pgvector_str(query_embedding)
 
@@ -111,11 +164,20 @@ def search_similar(query_embedding: list[float], limit: int = 3) -> list[dict[st
     LIMIT %s;
     """
 
+    start = perf_counter()
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, (embedding_str, embedding_str, limit))
             rows = cur.fetchall()
-            return [dict(row) for row in rows]
+
+    duration_ms = (perf_counter() - start) * 1000
+    logger.info(
+        "search_similar limit=%d rows=%d in %.1f ms",
+        limit,
+        len(rows),
+        duration_ms,
+    )
+    return [dict(row) for row in rows]
 
 
 def list_documents(limit: int = 100) -> list[dict[str, Any]]:

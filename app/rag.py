@@ -2,15 +2,17 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-
+import logging
+from time import perf_counter
 from dotenv import load_dotenv
 from openai import OpenAI
 
 from .chunking import chunk_pdf_pages
-from .db import count_documents, insert_document, search_similar
+from .db import count_documents, insert_documents_batch, insert_document, search_similar
 from .embeddings import get_embedding
 from .pdf_utils import extract_pdf_pages
 
+logger = logging.getLogger("rag.service")
 load_dotenv()
 
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
@@ -218,46 +220,87 @@ def ingest_pdf(
     chunk_size: int = 1200,
     overlap: int = 200,
 ) -> dict[str, Any]:
+    total_start = perf_counter()
     source = normalize_source(source, pdf_path)
 
+    t0 = perf_counter()
     pages = extract_pdf_pages(pdf_path)
+    extract_ms = (perf_counter() - t0) * 1000
 
+    t1 = perf_counter()
     chunks = chunk_pdf_pages(
         pages=pages,
         chunk_size=chunk_size,
         overlap=overlap,
     )
+    chunk_ms = (perf_counter() - t1) * 1000
 
     if not chunks:
         raise ValueError(f"No chunks produced for PDF: {pdf_path}")
 
+    embed_start = perf_counter()
+    batch: list[dict[str, Any]] = []
+    inserted_count = 0
+    batch_size = 50
+
     for global_chunk_index, chunk in enumerate(chunks):
         embedding = get_embedding(chunk["content"])
-        insert_document(
-            source=source,
-            page_start=chunk["page_start"],
-            page_end=chunk["page_end"],
-            chunk_index=global_chunk_index,
-            content=chunk["content"],
-            embedding=embedding,
+        batch.append(
+            {
+                "source": source,
+                "page_start": chunk["page_start"],
+                "page_end": chunk["page_end"],
+                "chunk_index": global_chunk_index,
+                "content": chunk["content"],
+                "embedding": embedding,
+            }
         )
+
+        if len(batch) >= batch_size:
+            insert_documents_batch(batch)
+            inserted_count += len(batch)
+            batch = []
+
+    if batch:
+        insert_documents_batch(batch)
+        inserted_count += len(batch)
+
+    embed_insert_ms = (perf_counter() - embed_start) * 1000
+    total_ms = (perf_counter() - total_start) * 1000
+
+    logger.info(
+        "ingest_pdf source=%s pages=%d chunks=%d extract=%.1fms chunk=%.1fms embed+insert=%.1fms total=%.1fms",
+        source,
+        len(pages),
+        len(chunks),
+        extract_ms,
+        chunk_ms,
+        embed_insert_ms,
+        total_ms,
+    )
 
     return {
         "source": source,
         "pdf_path": pdf_path,
         "pages_read": len(pages),
-        "chunks_added": len(chunks),
+        "chunks_added": inserted_count,
     }
 
-
 def retrieve_context(question: str, top_k: int = 3) -> dict[str, Any]:
+    total_start = perf_counter()
+
     if count_documents() == 0:
         raise ValueError("Vector database boş. Önce doküman eklemelisin.")
 
+    t0 = perf_counter()
     question_embedding = get_embedding(question)
+    question_embed_ms = (perf_counter() - t0) * 1000
 
+    t1 = perf_counter()
     raw_matches = search_similar(question_embedding, limit=max(top_k * 4, 10))
+    search_ms = (perf_counter() - t1) * 1000
 
+    t2 = perf_counter()
     filtered_matches = []
     for match in raw_matches:
         if looks_like_reference_chunk(match["content"]):
@@ -265,9 +308,12 @@ def retrieve_context(question: str, top_k: int = 3) -> dict[str, Any]:
         filtered_matches.append(match)
 
     filtered_matches = dedupe_matches(filtered_matches)
-    filtered_matches = rerank_matches(question, filtered_matches)
+    if not filtered_matches:
+        filtered_matches = dedupe_matches(raw_matches)
 
+    filtered_matches = rerank_matches(question, filtered_matches)
     matches = filtered_matches[:top_k]
+    rerank_ms = (perf_counter() - t2) * 1000
 
     context_parts = []
     for i, match in enumerate(matches, start=1):
@@ -278,14 +324,31 @@ def retrieve_context(question: str, top_k: int = 3) -> dict[str, Any]:
             f"text={match['content']}"
         )
 
+    total_ms = (perf_counter() - total_start) * 1000
+    logger.info(
+        "retrieve_context top_k=%d raw=%d final=%d q_embed=%.1fms search=%.1fms rerank=%.1fms total=%.1fms question=%r",
+        top_k,
+        len(raw_matches),
+        len(matches),
+        question_embed_ms,
+        search_ms,
+        rerank_ms,
+        total_ms,
+        question[:120],
+    )
+
     return {
         "matches": matches,
         "context": "\n\n---\n\n".join(context_parts),
     }
 
-
 def ask_question(question: str, top_k: int = 3) -> dict[str, Any]:
+    total_start = perf_counter()
+
+    t0 = perf_counter()
     retrieved = retrieve_context(question, top_k=top_k)
+    retrieval_ms = (perf_counter() - t0) * 1000
+
     matches = retrieved["matches"]
     context = retrieved["context"]
 
@@ -320,14 +383,27 @@ def ask_question(question: str, top_k: int = 3) -> dict[str, Any]:
         },
     ]
 
+    t1 = perf_counter()
     response = client.chat.completions.create(
         model=OPENROUTER_CHAT_MODEL,
         messages=messages,
         temperature=0.0,
     )
+    llm_ms = (perf_counter() - t1) * 1000
 
     raw_answer = response.choices[0].message.content or ""
     answer = clean_answer(raw_answer, source_names)
+
+    total_ms = (perf_counter() - total_start) * 1000
+    logger.info(
+        "ask_question top_k=%d retrieval=%.1fms llm=%.1fms total=%.1fms model=%s question=%r",
+        top_k,
+        retrieval_ms,
+        llm_ms,
+        total_ms,
+        OPENROUTER_CHAT_MODEL,
+        question[:120],
+    )
 
     return {
         "question": question,
