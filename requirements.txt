@@ -6,3 +6,5 @@ openai
 requests
 pydantic
 requests
+pypdf
+python-multipart
