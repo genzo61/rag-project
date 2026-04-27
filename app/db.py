@@ -153,7 +153,7 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
     if source:
         source = normalize_source(source)
 
-    sql = """
+    documents_sql = """
     SELECT
         id,
         source,
@@ -163,6 +163,7 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
         content,
         1 - (embedding <=> %s::vector) AS similarity
     FROM documents
+    WHERE (%s::text IS NULL OR lower(source) = lower(%s::text) OR lower(source) = lower(%s::text || '.pdf'))
     ORDER BY embedding <=> %s::vector
     LIMIT %s;
     """
@@ -170,14 +171,73 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
     start = perf_counter()
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, (embedding_str, embedding_str, limit))
+            cur.execute(
+                documents_sql,
+                (embedding_str, source, source, source, embedding_str, limit),
+            )
+            rows = cur.fetchall()
+
+            if rows:
+                duration_ms = (perf_counter() - start) * 1000
+                logger.info(
+                    "search_similar backend=documents limit=%d rows=%d source=%s in %.1f ms",
+                    limit,
+                    len(rows),
+                    source,
+                    duration_ms,
+                )
+                return [dict(row) for row in rows]
+
+            cur.execute("SELECT to_regclass('public.document_chunk')")
+            table_ref = cur.fetchone()
+            table_exists = bool(table_ref and next(iter(table_ref.values()), None))
+            if not table_exists:
+                duration_ms = (perf_counter() - start) * 1000
+                logger.info(
+                    "search_similar backend=documents fallback=document_chunk_missing limit=%d rows=0 source=%s in %.1f ms",
+                    limit,
+                    source,
+                    duration_ms,
+                )
+                return []
+
+            source_expr = "COALESCE(vmetadata->>'source', vmetadata->>'file_name', vmetadata->>'filename', collection_name)"
+            chunk_sql = f"""
+            SELECT
+                id,
+                {source_expr} AS source,
+                CASE
+                    WHEN (vmetadata->>'page') ~ '^\\d+$' THEN (vmetadata->>'page')::int
+                    ELSE 1
+                END AS page_start,
+                CASE
+                    WHEN (vmetadata->>'page') ~ '^\\d+$' THEN (vmetadata->>'page')::int
+                    ELSE 1
+                END AS page_end,
+                0 AS chunk_index,
+                text AS content,
+                1 - (vector <=> %s::vector) AS similarity
+            FROM document_chunk
+            WHERE (
+                %s::text IS NULL
+                OR lower({source_expr}) = lower(%s::text)
+                OR lower({source_expr}) = lower(%s::text || '.pdf')
+            )
+            ORDER BY vector <=> %s::vector
+            LIMIT %s;
+            """
+            cur.execute(
+                chunk_sql,
+                (embedding_str, source, source, source, embedding_str, limit),
+            )
             rows = cur.fetchall()
 
     duration_ms = (perf_counter() - start) * 1000
     logger.info(
-        "search_similar limit=%d rows=%d in %.1f ms",
+        "search_similar backend=document_chunk limit=%d rows=%d source=%s in %.1f ms",
         limit,
         len(rows),
+        source,
         duration_ms,
     )
     return [dict(row) for row in rows]
@@ -217,12 +277,25 @@ def list_sources() -> list[str]:
             return [row[0] for row in rows]
 
 def count_documents() -> int:
-    sql = "SELECT COUNT(*) FROM documents;"
+    documents_sql = "SELECT COUNT(*) FROM documents;"
+    chunk_sql = "SELECT COUNT(*) FROM document_chunk;"
+    table_check_sql = "SELECT to_regclass('public.document_chunk');"
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
-            return int(cur.fetchone()[0])
+            cur.execute(documents_sql)
+            documents_count = int(cur.fetchone()[0])
+            if documents_count > 0:
+                return documents_count
+
+            cur.execute(table_check_sql)
+            table_ref = cur.fetchone()
+            if not table_ref or not table_ref[0]:
+                return 0
+
+            cur.execute(chunk_sql)
+            chunk_count = int(cur.fetchone()[0])
+            return chunk_count
 
 
 def delete_by_source(source: str) -> int:
