@@ -12,9 +12,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Any
 
+from .dp_knowledge_seed import seed_dp_assistant_knowledge
 from .db import count_documents, delete_by_source, init_db, list_documents, list_sources
 from .rag import ask_question, ingest_pdf, normalize_source
-
+from .orchestrator import answer_chat
 
 def configure_logging() -> None:
     log_dir = Path("logs")
@@ -83,6 +84,12 @@ class AskRequest(BaseModel):
     source: str | None = Field(None, description="Sadece belirli bir source içinde ara")
     use_web: bool = Field(False, description="Web search (SearXNG) kullanılsın mı?")
     web_top_k: int = Field(5, ge=1, le=20, description="Web search max sonuç sayısı")
+
+class OrchestratedChatRequest(BaseModel):
+    question: str = Field(..., description="Kullanıcı sorusu")
+    top_k: int = Field(8, ge=1, le=10)
+    source: str | None = Field(None)
+    web_top_k: int = Field(5, ge=1, le=20)
 
 class PdfIngestRequest(BaseModel):
     source: str | None = Field(None, description="Kaynak adı, boş bırakılırsa otomatik üretilir")
@@ -219,6 +226,7 @@ def _build_models_response() -> dict[str, Any]:
 @app.on_event("startup")
 def startup_event():
     init_db()
+    seed_dp_assistant_knowledge()
 
 
 @app.get("/")
@@ -269,6 +277,18 @@ def ask(payload: AskRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/chat")
+def chat(payload: OrchestratedChatRequest):
+    try:
+        return answer_chat(
+            question=payload.question,
+            top_k=payload.top_k,
+            source = payload.source,
+            web_top_k = payload.web_top_k,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))        
 
 @app.post("/v1/chat/completions")
 def chat_completions(payload: ChatCompletionRequest):
