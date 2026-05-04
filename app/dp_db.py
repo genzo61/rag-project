@@ -23,18 +23,25 @@ def _connection():
 
 def _extract_package_name(question: str) -> str | None:
     known = re.search(
-        r"(@[a-z0-9_.-]+/[a-z0-9_.-]+|left-pad|is-number|event-stream|lodash|react|express|axios)",
+        r"(@[a-z0-9_.-]+/[a-z0-9_.-]+|left-pad|leftpad|is-number|event-stream|lodash|react|express|axios)",
         question or "",
         re.IGNORECASE,
     )
     if known:
-        return known.group(1).lower()
+        value = known.group(1).lower()
+        if value == "leftpad":
+            return "left-pad"
+        return value
 
     quoted = re.search(r"['\"]([^'\"]+)['\"]", question or "")
     if quoted:
-        return quoted.group(1).strip().lower()
+        value = quoted.group(1).strip().lower()
+        if value == "leftpad":
+            return "left-pad"
+        return value
 
     return None
+
 
 
 def query_internal_data(question: str, limit: int = 12) -> dict[str, Any]:
