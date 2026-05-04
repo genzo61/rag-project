@@ -61,6 +61,49 @@ WEB_KEYWORDS = (
     "bugun",
 )
 
+DP_VECTOR_HINTS = (
+    "query the data processing db",
+    "requires querying the data processing db",
+    "structured internal data",
+    "structured/internal data",
+    "structured/internal facts",
+    "internal structured data",
+    "audit history",
+    "hidden metadata",
+    "processing failures",
+    "validation results",
+    "cross-reference",
+    "cross reference",
+    "npm package processing jobs",
+)
+
+WEB_VECTOR_HINTS = (
+    "query web search",
+    "requires web search",
+    "external or current data",
+    "external/current data",
+    "external or current facts",
+    "current external data",
+    "current facts",
+    "latest npm package versions",
+    "current cves",
+    "current release notes",
+    "security advisories",
+    "recent ecosystem information",
+)
+
+def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in phrases)
+
+def _vector_requests_dp_db(vector_matches: list[dict[str, Any]]) -> bool:
+    vector_blob = _relevant_vector_blob(vector_matches)
+    return _contains_any(vector_blob, DP_VECTOR_HINTS)
+
+def _vector_requests_web(vector_matches: list[dict[str, Any]]) -> bool:
+    vector_blob = _relevant_vector_blob(vector_matches)
+    return _contains_any(vector_blob, WEB_VECTOR_HINTS)
+
 
 def _relevant_vector_blob(
     vector_matches: list[dict[str, Any]],
@@ -104,35 +147,84 @@ def _relevant_vector_blob(
 #     return question_needs_db or vector_says_db
 
 def _needs_dp_db(question: str, vector_matches: list[dict[str, Any]]) -> bool:
-    q = (question or "").lower()
+    q = (question or "").lower().strip()
 
-    return any(
-        keyword in q
-        for keyword in (
-            "audit",
+    architecture_patterns = (
+        "how does",
+        "how do",
+        "what is the role",
+        "what is the purpose",
+        "how are",
+        "how is",
+        "workflow",
+        "architecture",
+        "at an architecture level",
+        "interaction between",
+        "interact with",
+        "how formulas",
+        "how validations",
+        "how aggregations",
+    )
+
+    structured_internal_patterns = (
+        "audit",
+        "audit history",
+        "hidden metadata",
+        "metadata",
+        "processing failure",
+        "processing failures",
+        "why did",
+        "failure",
+        "failed",
+        "validation result",
+        "validation results",
+        "cross-reference",
+        "cross reference",
+        "internal status",
+        "processing status",
+        "quarantine",
+        "quarantined",
+        "which job",
+        "which jobs",
+        "which run",
+        "which runs",
+        "which package",
+        "specific run",
+        "specific job",
+        "specific record",
+        "count",
+        "counts",
+        "processed count",
+        "inserted count",
+        "message",
+        "owner",
+        "details",
+    )
+
+    if any(pattern in q for pattern in structured_internal_patterns):
+        return True
+
+    if any(pattern in q for pattern in architecture_patterns):
+        return False
+
+    vector_blob = _relevant_vector_blob(vector_matches)
+
+    vector_requests_db = any(
+        phrase in vector_blob
+        for phrase in (
+            "query the data processing db",
+            "structured aggregation run details",
             "audit history",
-            "hidden metadata",
-            "metadata",
-            "processing failure",
-            "processing failures",
-            "why did",
-            "failure",
-            "failed",
-            "validation",
-            "validation result",
-            "validation results",
-            "cross-reference",
-            "cross reference",
-            "internal",
-            "join",
-            "owner",
-            "package processing",
-            "processing job",
-            "processing status",
-            "quarantine",
-            "quarantined",
+            "execution status",
+            "processed counts",
+            "inserted counts",
+            "run messages",
+            "structured internal records",
+            "internal metadata",
         )
     )
+
+    return vector_requests_db
 
 
 
@@ -159,7 +251,7 @@ def _needs_dp_db(question: str, vector_matches: list[dict[str, Any]]) -> bool:
 def _needs_web(question: str, vector_matches: list[dict[str, Any]]) -> bool:
     q = (question or "").lower()
 
-    return any(
+    question_needs_web = any(
         keyword in q
         for keyword in (
             "latest",
@@ -181,6 +273,12 @@ def _needs_web(question: str, vector_matches: list[dict[str, Any]]) -> bool:
             "bugun",
         )
     )
+
+    if not question_needs_web:
+        return False
+
+    return True
+
 
 def _build_vector_source_names(matches: list[dict[str, Any]]) -> list[str]:
     names = []
@@ -273,6 +371,17 @@ def _call_llm(
                 "Write the final answer as a comparison when the question asks to compare.\n"
                 "Preserve vulnerability ranges exactly as written in WEB SEARCH CONTEXT.\n"
                 "Do not say a version is secure, fixed, or not affected unless the context explicitly says so.\n"
+                "Prefer exact dates over relative phrases like '8 years ago' when the context provides them.\n"
+                "If an exact date is not present in the context, say it was not verified.\n"
+                "Do not merge similarly named packages unless the context explicitly says they are the same package.\n"
+                "Only state a package version, advisory, vulnerability, or published date if it is explicitly present in the provided context.\n"
+                "If multiple similarly named packages appear, answer only for the exact package asked by the user unless the question explicitly asks for comparison.\n"
+                "Do not broaden the answer to related packages or scoped packages.\n"
+                "Prefer exact published dates when present in the context instead of relative phrases like '8 years ago' or 'a month ago'.\n"
+                "If the exact published date is not present in the context, say the exact date was not verified.\n"
+                "For web results, do not infer that a newer version fixes a vulnerability unless the context explicitly says so.\n"
+                "Do not mention Data Processing DB when data_processing_db is not in TOOLS_USED.\n"
+                "Do not use relative publish times like '8 years ago' unless no exact date is present in the context.\n"
             ),
         },
         {
@@ -312,7 +421,9 @@ def _build_web_query(question: str) -> str:
 
     if "lodash" in q:
         return "lodash npm latest version security advisory"
-    if "left-pad" in q or "leftpad" in q:
+    if "left-pad" in q and "left-pad" not in q and "leftpad" not in q:
+        return "left-pad npm latest version"
+    if "leftpad" in q and "left-pad" not in q and "leftpad" not in text:
         return "left-pad npm latest version"
     if "event-stream" in q:
         return "event-stream npm latest version security advisory"
@@ -320,7 +431,22 @@ def _build_web_query(question: str) -> str:
     return question
 
 
-def _filter_package_web_results(question: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+
+def _extract_npm_package_from_url(url: str) -> str | None:
+    match = re.search(
+        r"npmjs\.com/package/([^/?#]+(?:/[^/?#]+)?)",
+        url or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).strip().lower()
+
+
+def _filter_package_web_results(
+    question: str,
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     q = (question or "").lower()
 
     trusted_domains = (
@@ -332,25 +458,54 @@ def _filter_package_web_results(question: str, results: list[dict[str, Any]]) ->
         "snyk.io",
     )
 
+    exact_package = None
+    if "left-pad" in q:
+        exact_package = "left-pad"
+    elif re.search(r"\bleftpad\b", q):
+        exact_package = "leftpad"
+    elif "lodash" in q:
+        exact_package = "lodash"
+    elif "event-stream" in q:
+        exact_package = "event-stream"
+    elif "is-number" in q:
+        exact_package = "is-number"
+
     filtered = []
+
     for result in results:
-        domain = str(result.get("source") or "").lower()
-        url = str(result.get("url") or "").lower()
-        title = str(result.get("title") or "").lower()
-        content = str(result.get("content") or "").lower()
+        domain = str(result.get("source") or "").lower().strip()
+        url = str(result.get("url") or "").lower().strip()
+        title = str(result.get("title") or "").lower().strip()
+        content = str(result.get("content") or "").lower().strip()
         text = f"{url} {title} {content}"
 
         if not any(domain == d or domain.endswith("." + d) for d in trusted_domains):
             continue
 
-        if "lodash" in q and "lodash" not in text:
-            continue
-        if ("left-pad" in q or "leftpad" in q) and "left-pad" not in text and "leftpad" not in text:
-            continue
+        npm_package_in_url = _extract_npm_package_from_url(url)
+
+        if exact_package and "npmjs.com" in domain:
+            if npm_package_in_url != exact_package:
+                continue
+
+        if exact_package == "left-pad":
+            if "left-pad" not in text:
+                continue
+
+        elif exact_package == "leftpad":
+            if "leftpad" not in text:
+                continue
+
+        elif exact_package:
+            if exact_package not in text:
+                continue
 
         filtered.append(result)
 
     return filtered or results[:3]
+
+
+
 def _format_tools_used(sources_used: list[str]) -> str:
     labels = {
         "vector_db": "Vector DB",
@@ -361,10 +516,24 @@ def _format_tools_used(sources_used: list[str]) -> str:
 
 
 def _normalize_answer_tools(answer: str, sources_used: list[str]) -> str:
+    cleaned = (answer or "").strip()
+
+    cleaned = re.sub(
+        r"(?im)^\s*tools?_used\s*:\s*.*$\n?",
+        "",
+        cleaned,
+    )
+
+    cleaned = re.sub(
+        r"(?im)^\s*tools\s*/\s*sources\s+used\s*:\s*.*$\n?",
+        "",
+        cleaned,
+    )
+
     cleaned = re.sub(
         r"(?is)\n*\s*tools used\s*:.*?(?=\n\s*sources\s*:|\Z)",
         "",
-        answer or "",
+        cleaned,
     ).strip()
 
     source_match = re.search(r"(?is)\n\s*sources\s*:", cleaned)
