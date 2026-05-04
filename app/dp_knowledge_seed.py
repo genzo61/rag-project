@@ -43,10 +43,67 @@ DOCS = [
             "and vector plus Data Processing DB plus web search answers. Responses must show which sources and tools were used."
         ),
     },
+    {
+        "chunk_index": 5,
+        "content": (
+            "The Data Processing App includes aggregation modules that calculate derived time-window results "
+            "from incoming datapoints. Aggregation runs are tracked with audit information such as rule id, "
+            "aggregation name, window start, window end, started at, completed at, status, processed count, "
+            "inserted count, and message."
+        ),
+    },
+    {
+        "chunk_index": 6,
+        "content": (
+            "Aggregation audit data belongs to the Data Processing DB, not the Vector DB. "
+            "The assistant should use Vector DB first for retrieval, then query the Data Processing DB when the user asks "
+            "for structured aggregation run details, audit history, execution status, processed counts, inserted counts, "
+            "or run messages."
+        ),
+    },
+    {
+        "chunk_index": 7,
+        "content": (
+            "The Data Processing App includes validation modules that evaluate incoming datapoints and formula-related values "
+            "against validation rules. Validation-related information can include rule names, validation variables, "
+            "pass or fail outcomes, severity, and corrective or blocking behavior."
+        ),
+    },
+    {
+        "chunk_index": 8,
+        "content": (
+            "When a question asks why a processing result failed, which validation rule triggered, which audit events happened, "
+            "or what internal metadata caused a decision, the assistant should query the Data Processing DB after checking the Vector DB first."
+        ),
+    },
+    {
+        "chunk_index": 9,
+        "content": (
+            "The Data Processing App includes formula and calculation modules. Formula workflows can reference datapoints, "
+            "formula variables, imported formula bundles, calculated outputs, and formula result snapshots. "
+            "Cross-reference paths between formulas, validations, and processing jobs may require structured lookup from the Data Processing DB."
+        ),
+    },
+    {
+        "chunk_index": 10,
+        "content": (
+            "Questions about how formulas, aggregations, and validations work at an architecture level should usually be answered "
+            "from Vector DB context. Questions about specific runs, statuses, audit records, counts, validation outcomes, "
+            "or internal metadata should add Data Processing DB context."
+        ),
+    },
+    {
+        "chunk_index": 11,
+        "content": (
+            "The assistant should keep module boundaries clear: Vector DB is used first for retrieval and orchestration guidance, "
+            "Data Processing DB is used for structured internal records, and web search is used only for external or current facts."
+        ),
+    },
 ]
 
 
-def seed_dp_assistant_knowledge(replace_existing: bool = False) -> None:
+
+def seed_dp_assistant_knowledge(replace_existing: bool = True) -> None:
     if replace_existing:
         delete_by_source(SOURCE)
 

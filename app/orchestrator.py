@@ -147,40 +147,84 @@ def _relevant_vector_blob(
 #     return question_needs_db or vector_says_db
 
 def _needs_dp_db(question: str, vector_matches: list[dict[str, Any]]) -> bool:
-    q = (question or "").lower()
+    q = (question or "").lower().strip()
 
-    question_needs_db = any(
-        keyword in q
-        for keyword in (
-            "audit",
+    architecture_patterns = (
+        "how does",
+        "how do",
+        "what is the role",
+        "what is the purpose",
+        "how are",
+        "how is",
+        "workflow",
+        "architecture",
+        "at an architecture level",
+        "interaction between",
+        "interact with",
+        "how formulas",
+        "how validations",
+        "how aggregations",
+    )
+
+    structured_internal_patterns = (
+        "audit",
+        "audit history",
+        "hidden metadata",
+        "metadata",
+        "processing failure",
+        "processing failures",
+        "why did",
+        "failure",
+        "failed",
+        "validation result",
+        "validation results",
+        "cross-reference",
+        "cross reference",
+        "internal status",
+        "processing status",
+        "quarantine",
+        "quarantined",
+        "which job",
+        "which jobs",
+        "which run",
+        "which runs",
+        "which package",
+        "specific run",
+        "specific job",
+        "specific record",
+        "count",
+        "counts",
+        "processed count",
+        "inserted count",
+        "message",
+        "owner",
+        "details",
+    )
+
+    if any(pattern in q for pattern in structured_internal_patterns):
+        return True
+
+    if any(pattern in q for pattern in architecture_patterns):
+        return False
+
+    vector_blob = _relevant_vector_blob(vector_matches)
+
+    vector_requests_db = any(
+        phrase in vector_blob
+        for phrase in (
+            "query the data processing db",
+            "structured aggregation run details",
             "audit history",
-            "hidden metadata",
-            "metadata",
-            "processing failure",
-            "processing failures",
-            "why did",
-            "failure",
-            "failed",
-            "validation",
-            "validation result",
-            "validation results",
-            "cross-reference",
-            "cross reference",
-            "internal",
-            "join",
-            "owner",
-            "package processing",
-            "processing job",
-            "processing status",
-            "quarantine",
-            "quarantined",
+            "execution status",
+            "processed counts",
+            "inserted counts",
+            "run messages",
+            "structured internal records",
+            "internal metadata",
         )
     )
 
-    if not question_needs_db:
-        return False
-
-    return True
+    return vector_requests_db
 
 
 
