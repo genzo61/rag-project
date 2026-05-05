@@ -1,11 +1,13 @@
 import os
 import logging
 from time import sleep
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 logger = logging.getLogger("rag.embeddings")
 

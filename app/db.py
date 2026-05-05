@@ -9,7 +9,8 @@ from psycopg2.extras import RealDictCursor, execute_values
 from dotenv import load_dotenv
 
 logger = logging.getLogger("rag.db")
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT"))
