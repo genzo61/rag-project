@@ -1,0 +1,173 @@
+[
+  {
+    "id": "mt01",
+    "category": "arithmetic",
+    "question": "What is 125 + 349?",
+    "tool_expectation": "required",
+    "expected_numeric": 474.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt02",
+    "category": "arithmetic",
+    "question": "Calculate 17 * 23.",
+    "tool_expectation": "required",
+    "expected_numeric": 391.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt03",
+    "category": "arithmetic",
+    "question": "Calculate 985 - 426.",
+    "tool_expectation": "required",
+    "expected_numeric": 559.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt04",
+    "category": "arithmetic",
+    "question": "Calculate ((10 + 20 + 30) / 3) * 2.",
+    "tool_expectation": "required",
+    "expected_numeric": 40.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt05",
+    "category": "multi_step",
+    "question": "A store sells 8 notebooks at $3.75 each and 5 pens at $1.20 each. What is the total sales amount?",
+    "tool_expectation": "required",
+    "expected_numeric": 36.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt06",
+    "category": "multi_step",
+    "question": "Increase 240 by 15%, then subtract 18. What is the final result?",
+    "tool_expectation": "required",
+    "expected_numeric": 258.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt07",
+    "category": "multi_step",
+    "question": "A car travels 180 km at 60 km/h and 120 km at 80 km/h. What is the average speed for the whole trip?",
+    "tool_expectation": "required",
+    "expected_numeric": 66.6666666667,
+    "tolerance": 0.01
+  },
+  {
+    "id": "mt08",
+    "category": "multi_step",
+    "question": "Calculate the final price if the original price is 800 and the discount is 25%.",
+    "tool_expectation": "required",
+    "expected_numeric": 600.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt09",
+    "category": "multi_step",
+    "question": "Calculate density where mass = 50 kg and volume = 2 m^3.",
+    "tool_expectation": "required",
+    "expected_numeric": 25.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt10",
+    "category": "structured_numeric",
+    "question": "Find the arithmetic mean of 12, 18, 24, and 30.",
+    "tool_expectation": "required",
+    "expected_numeric": 21.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt11",
+    "category": "structured_numeric",
+    "question": "Find the weighted mean of 78, 85, and 92 with weights 0.2, 0.3, and 0.5.",
+    "tool_expectation": "required",
+    "expected_numeric": 87.1,
+    "tolerance": 0.001
+  },
+  {
+    "id": "mt12",
+    "category": "structured_numeric",
+    "question": "What is the percentage change from 84 to 105?",
+    "tool_expectation": "required",
+    "expected_numeric": 25.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt13",
+    "category": "structured_numeric",
+    "question": "How many values in the list 4, 9, 12, 7, 15, 10, 22 are greater than 10?",
+    "tool_expectation": "required",
+    "expected_numeric": 3.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt14",
+    "category": "structured_numeric",
+    "question": "Calculate pressure using P = F / A where F = 100 and A = 5.",
+    "tool_expectation": "required",
+    "expected_numeric": 20.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt15",
+    "category": "insufficient_input",
+    "question": "Calculate pressure using P = F / A where F = 100 N.",
+    "tool_expectation": "optional",
+    "requires_refusal": true,
+    "required_term_groups": [
+      ["cannot", "can't", "not enough", "need", "provide", "required"],
+      ["area", "A"]
+    ]
+  },
+  {
+    "id": "mt16",
+    "category": "conceptual",
+    "question": "What does the arithmetic mean represent?",
+    "tool_expectation": "forbidden",
+    "required_term_groups": [
+      ["average", "mean"],
+      ["sum", "adding"],
+      ["count", "number"]
+    ]
+  },
+  {
+    "id": "mt17",
+    "category": "conceptual",
+    "question": "Explain what pressure means.",
+    "tool_expectation": "forbidden",
+    "required_term_groups": [
+      ["force"],
+      ["area", "surface"]
+    ]
+  },
+  {
+    "id": "mt18",
+    "category": "structured_numeric",
+    "question": "Find the median of 5, 8, 11, and 14.",
+    "tool_expectation": "required",
+    "expected_numeric": 9.5,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt19",
+    "category": "structured_numeric",
+    "question": "What is 15% of 240?",
+    "tool_expectation": "required",
+    "expected_numeric": 36.0,
+    "tolerance": 1e-09
+  },
+  {
+    "id": "mt20",
+    "category": "insufficient_input",
+    "question": "Calculate the weighted mean of 78 and 85 with weights 0.2 only.",
+    "tool_expectation": "optional",
+    "requires_refusal": true,
+    "required_term_groups": [
+      ["cannot", "can't", "not enough", "missing", "need", "provide", "required"],
+      ["weight", "weights"]
+    ]
+  }
+]

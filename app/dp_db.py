@@ -1,13 +1,15 @@
 import os
 import re
 import logging
+from pathlib import Path
 from typing import Any
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 logger = logging.getLogger("rag.dp_db")
 
 

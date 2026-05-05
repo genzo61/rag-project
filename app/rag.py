@@ -16,7 +16,8 @@ from .embeddings import get_embedding
 from .pdf_utils import extract_pdf_pages
 
 logger = logging.getLogger("rag.service")
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
