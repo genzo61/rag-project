@@ -276,6 +276,7 @@ def ask(payload: AskRequest):
             web_top_k=payload.web_top_k,
         )
     except Exception as e:
+        logger.exception("POST /ask failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/chat")
@@ -426,4 +427,3 @@ def ingest_pdf_endpoint(payload: PdfIngestRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

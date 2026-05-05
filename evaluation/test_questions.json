@@ -1,0 +1,122 @@
+[
+  {
+    "id": "q01",
+    "category": "available",
+    "question": "What machine learning model performed best in the Syracuse water main break study?",
+    "reference_answer": "Gradient boosted decision trees performed best."
+  },
+  {
+    "id": "q02",
+    "category": "available",
+    "question": "How is the prediction problem framed in the Syracuse paper, and why is that framing useful for the city?",
+    "reference_answer": "It is framed as a binary classification problem about whether a water main break will occur on a given city block within the next three years, which helps the city operationalize the model and plan infrastructure work over that time horizon."
+  },
+  {
+    "id": "q03",
+    "category": "available",
+    "question": "What two operational uses of the risk scores are described for the City of Syracuse?",
+    "reference_answer": "Preventative maintenance on the top 1% of risky mains, and coordination with the Department of Public Works during road construction and maintenance."
+  },
+  {
+    "id": "q04",
+    "category": "available",
+    "question": "What does CRLI stand for, and how is it calculated?",
+    "reference_answer": "CRLI stands for Combined Real Loss Index and is the geometric mean of real losses per connection per day and real losses per mains length."
+  },
+  {
+    "id": "q05",
+    "category": "available",
+    "question": "Why is CRLI presented as easier to use than ILI?",
+    "reference_answer": "It is easier to calculate from operational data already available to utilities and does not require pressure data or service connection length."
+  },
+  {
+    "id": "q06",
+    "category": "available",
+    "question": "What relationship between CRLI and ILI is reported in the presentation?",
+    "reference_answer": "The presentation reports a strong relationship with a model fit around R^2 = 0.87."
+  },
+  {
+    "id": "q07",
+    "category": "missing",
+    "question": "What exact hyperparameters were used for the gradient boosted decision tree model?",
+    "reference_answer": "The provided sources do not specify the exact hyperparameters."
+  },
+  {
+    "id": "q08",
+    "category": "missing",
+    "question": "What annual dollar budget did Syracuse allocate to replace mains in the pilot?",
+    "reference_answer": "The provided sources do not specify the annual budget."
+  },
+  {
+    "id": "q09",
+    "category": "missing",
+    "question": "What CRLI reference bands have been validated for utilities outside Germany?",
+    "reference_answer": "The provided sources do not give validated non-German reference bands."
+  },
+  {
+    "id": "q10",
+    "category": "missing",
+    "question": "Which French utility first adopted CRLI after the conference?",
+    "reference_answer": "The provided sources do not identify a French utility that first adopted CRLI."
+  },
+  {
+    "id": "q11",
+    "category": "missing",
+    "question": "What pressure-corrected formula replaced CRLI in the final policy recommendation?",
+    "reference_answer": "The provided sources do not describe any replacement formula."
+  },
+  {
+    "id": "q12",
+    "category": "conflicting",
+    "question": "How many breaks occurred on the riskiest 52 mains during the Syracuse pilot?",
+    "reference_answer": "The sources conflict: one reports 33 breaks and another reports 42 breaks."
+  },
+  {
+    "id": "q13",
+    "category": "conflicting",
+    "question": "What mean CRLI value is reported for Rhineland-Palatinate?",
+    "reference_answer": "The presentation contains conflicting summary statistics: one slide reports an average of 7.16, while another summary slide appears to cite 6.14 as the mean."
+  },
+  {
+    "id": "q14",
+    "category": "conflicting",
+    "question": "What mean CRLI value is reported for Saarland?",
+    "reference_answer": "The presentation contains conflicting summary statistics: one slide reports an average of 7.65, while another summary slide appears to cite 7.79 as the mean."
+  },
+  {
+    "id": "q15",
+    "category": "conflicting",
+    "question": "Is the Syracuse system described only as a pilot, or as already deployed in the city?",
+    "reference_answer": "The sources indicate both deployment and an ongoing pilot, so a grounded answer should acknowledge that the system is described as deployed while also being piloted or field-validated."
+  },
+  {
+    "id": "q16",
+    "category": "mixed",
+    "question": "Which city deployed the water-main prediction model, and which two German regions are used in the CRLI evidence base?",
+    "reference_answer": "The model is deployed in Syracuse, and the CRLI evidence base uses utilities from Rhineland-Palatinate and Saarland."
+  },
+  {
+    "id": "q17",
+    "category": "mixed",
+    "question": "Compare the simplification strategy in both documents: what existing practice or metric is each document trying to improve on?",
+    "reference_answer": "The Syracuse work improves on reactive maintenance and simple expert heuristics, while the CRLI work offers a simpler alternative to the more complex Infrastructure Leakage Index."
+  },
+  {
+    "id": "q18",
+    "category": "mixed",
+    "question": "Which document uses temporal cross-validation, and which one reports an R^2 of about 0.87?",
+    "reference_answer": "The Syracuse water-main paper uses temporal cross-validation, and the CRLI presentation reports an R^2 of about 0.87 for the CRLI-ILI relationship."
+  },
+  {
+    "id": "q19",
+    "category": "mixed",
+    "question": "How do the two documents encode structural context when evaluating infrastructure risk or loss?",
+    "reference_answer": "The Syracuse paper evaluates risk at the city-block level within a three-year intervention horizon, while the CRLI normalizes losses by both service connections and mains length to account for network structure."
+  },
+  {
+    "id": "q20",
+    "category": "mixed",
+    "question": "Across both documents, what practical decision-making benefit is emphasized for utilities or city operations?",
+    "reference_answer": "Both emphasize more practical and defensible decision-making: Syracuse uses risk scores to target maintenance and coordinate works, and CRLI supports fair benchmarking and operational decisions without complex extra data."
+  }
+]
