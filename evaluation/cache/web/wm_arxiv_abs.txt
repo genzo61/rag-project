@@ -1,0 +1,599 @@
+[1805.03597] Using Machine Learning to Assess the Risk of and Prevent Water Main Breaks 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ Skip to main content 
+ 
+ 
+ 
+ 
+ 
+ Learn about arXiv becoming an independent nonprofit. 
+ 
+ We gratefully acknowledge support from the Simons Foundation, member institutions , and all contributors. 
+ Donate 
+ 
+ 
+
+ 
+ 
+ 
+ > stat > arXiv:1805.03597
+ 
+
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ Help | Advanced Search 
+ 
+ 
+ 
+ 
+ All fields 
+ Title 
+ Author 
+ Abstract 
+ Comments 
+ Journal reference 
+ ACM classification 
+ MSC classification 
+ Report number 
+ arXiv identifier 
+ DOI 
+ ORCID 
+ arXiv author ID 
+ Help pages 
+ Full text 
+ 
+ 
+ 
+ 
+ Search 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ open search 
+ 
+ 
+ 
+ 
+ 
+ 
+ GO 
+ 
+ 
+ 
+
+ open navigation menu 
+ 
+ 
+ quick links 
+ 
+ Login 
+ Help Pages 
+ About 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+--> 
+
+ 
+ 
+ Statistics > Applications 
+ 
+
+ 
+ arXiv:1805.03597 (stat)
+ 
+ 
+ 
+ 
+ 
+ [Submitted on 9 May 2018] 
+ Title: Using Machine Learning to Assess the Risk of and Prevent Water Main Breaks 
+ Authors: Avishek Kumar , Syed Ali Asad Rizvi , Benjamin Brooks , R. Ali Vanderveld , Kevin H. Wilson , Chad Kenney , Sam Edelstein , Adria Finch , Andrew Maxwell , Joe Zuckerbraun , Rayid Ghani View a PDF of the paper titled Using Machine Learning to Assess the Risk of and Prevent Water Main Breaks, by Avishek Kumar and 10 other authors 
+ View PDF 
+
+ 
+ Abstract: Water infrastructure in the United States is beginning to show its age, particularly through water main breaks. Main breaks cause major disruptions in everyday life for residents and businesses. Water main failures in Syracuse, N.Y. (as in most cities) are handled reactively rather than proactively. A barrier to proactive maintenance is the city's inability to predict the risk of failure on parts of its infrastructure. In response, we worked with the city to build a ML system to assess the risk of a water mains breaking. Using historical data on which mains have failed, descriptors of pipes, and other data sources, we evaluated several models' abilities to predict breaks three years into the future. Our results show that our system using gradient boosted decision trees performed the best out of several algorithms and expert heuristics, achieving precision at 1\% (P@1) of 0.62. Our model outperforms a random baseline (P@1 of 0.08) and expert heuristics such as water main age (P@1 of 0.10) and history of past main breaks (P@1 of 0.48). The model is deployed in the City of Syracuse. We are running a pilot by calculating the risk of failure for each city block over the period 2016-2018 using data up to the end of 2015 and, as of the end of 2017, there have been 33 breaks on our riskiest 52 mains. This has been a successful initiative for the city of Syracuse in improving their infrastructure and we believe this approach can be applied to other cities.
+ 
+
+ 
+ 
+ 
+ Comments: 
+ SIGKDD'18 London, United Kingdom 
+ 
+ 
+ Subjects: 
+ 
+ Applications (stat.AP) 
+ 
+ Cite as: 
+ arXiv:1805.03597 [stat.AP] 
+ 
+ 
+ 
+ (or 
+ arXiv:1805.03597v1 [stat.AP] for this version)
+ 
+ 
+ 
+ 
+ https://doi.org/10.48550/arXiv.1805.03597 
+ 
+ 
+ Focus to learn more 
+ 
+ 
+ 
+ arXiv-issued DOI via DataCite 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Submission history From: Avishek Kumar [ view email ] [v1] 
+ Wed, 9 May 2018 15:46:35 UTC (6,998 KB) 
+ 
+ 
+ 
+ 
+ 
+ Full-text links: 
+ Access Paper: 
+ 
+ 
+View a PDF of the paper titled Using Machine Learning to Assess the Risk of and Prevent Water Main Breaks, by Avishek Kumar and 10 other authors View PDF TeX Source
+ 
+ view license 
+ 
+ 
+ Current browse context: stat.AP 
+
+ 
+ 
+ 
+ 
+ | 
+ next > 
+ 
+ 
+ new 
+ | 
+ recent 
+ | 2018-05 
+ 
+ Change to browse by:
+ 
+ stat 
+ 
+ 
+
+ 
+ 
+ References & Citations 
+ 
+ NASA ADS Google Scholar 
+ Semantic Scholar 
+ 
+ 
+ 
+
+ 
+ export BibTeX citation 
+ Loading... 
+ 
+
+ 
+ 
+ 
+ BibTeX formatted citation 
+ × 
+ 
+ 
+ loading... 
+ 
+ 
+ Data provided by: 
+ 
+ 
+ 
+ 
+ Bookmark 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Bibliographic Tools 
+ 
+ Bibliographic and Citation Tools 
+ 
+ 
+ 
+ 
+ 
+ 
+ Bibliographic Explorer Toggle 
+ 
+ 
+ 
+ Bibliographic Explorer ( What is the Explorer? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Connected Papers Toggle 
+ 
+ 
+ 
+ Connected Papers ( What is Connected Papers? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ Litmaps Toggle 
+ 
+ 
+ 
+ Litmaps ( What is Litmaps? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ scite.ai Toggle 
+ 
+ 
+ 
+ scite Smart Citations ( What are Smart Citations? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ Code, Data, Media 
+ 
+ Code, Data and Media Associated with this Article 
+ 
+ 
+ 
+ 
+ 
+ 
+ alphaXiv Toggle 
+ 
+ 
+ 
+ alphaXiv ( What is alphaXiv? ) 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ Links to Code Toggle 
+ 
+ 
+ 
+ CatalyzeX Code Finder for Papers ( What is CatalyzeX? ) 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ DagsHub Toggle 
+ 
+ 
+ 
+ DagsHub ( What is DagsHub? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ GotitPub Toggle 
+ 
+ 
+ 
+ Gotit.pub ( What is GotitPub? ) 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ Huggingface Toggle 
+ 
+ 
+ 
+ Hugging Face ( What is Huggingface? ) 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ ScienceCast Toggle 
+ 
+ 
+ 
+ ScienceCast ( What is ScienceCast? ) 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ Demos 
+ 
+ Demos 
+ 
+ 
+ 
+ 
+ 
+ 
+ Replicate Toggle 
+ 
+ 
+ 
+ Replicate ( What is Replicate? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Spaces Toggle 
+ 
+ 
+ 
+ Hugging Face Spaces ( What is Spaces? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Spaces Toggle 
+ 
+ 
+ 
+ TXYZ.AI ( What is TXYZ.AI? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Related Papers 
+ 
+ Recommenders and Search Tools 
+ 
+ 
+ 
+ 
+ 
+ 
+ Link to Influence Flower 
+ 
+ 
+ 
+ Influence Flower ( What are Influence Flowers? ) 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Core recommender toggle 
+ 
+ 
+ 
+ CORE Recommender ( What is CORE? ) 
+ 
+ 
+ 
+ 
+ 
+ Author 
+ Venue 
+ Institution 
+ Topic 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ About arXivLabs
+ 
+ 
+ 
+ 
+ arXivLabs: experimental projects with community collaborators 
+ arXivLabs is a framework that allows collaborators to develop and share new arXiv features directly on our website. 
+ Both individuals and organizations that work with arXivLabs have embraced and accepted our values of openness, community, excellence, and user data privacy. arXiv is committed to these values and only works with partners that adhere to them. 
+ Have an idea for a project that will add value for arXiv's community? Learn more about arXivLabs . 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ Which authors of this paper are endorsers? |
+ Disable MathJax ( What is MathJax? )
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ About 
+ Help 
+ 
+ 
+ 
+ 
+ 
+ contact arXiv Click here to contact arXiv 
+ Contact 
+ 
+ 
+ subscribe to arXiv mailings Click here to subscribe 
+ Subscribe 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Copyright 
+ Privacy Policy 
+ 
+ 
+ 
+ 
+ Web Accessibility Assistance 
+ 
+ 
+ arXiv Operational Status

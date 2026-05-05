@@ -1,0 +1,32 @@
+[
+  {
+    "id": "wm_arxiv_abs",
+    "source": "eval_water_main_breaks",
+    "type": "html",
+    "url": "https://arxiv.org/abs/1805.03597"
+  },
+  {
+    "id": "wm_kdd_page",
+    "source": "eval_water_main_breaks",
+    "type": "html",
+    "url": "https://www.kdd.org/kdd2018/accepted-papers/view/using-machine-learning-to-assess-the-risk-of-and-prevent-water-main-breaks"
+  },
+  {
+    "id": "wm_arxiv_pdf",
+    "source": "eval_water_main_breaks",
+    "type": "pdf",
+    "url": "https://arxiv.org/pdf/1805.03597.pdf"
+  },
+  {
+    "id": "crli_news_page",
+    "source": "eval_crli",
+    "type": "html",
+    "url": "https://www.aquabench.de/en/news/crli.html"
+  },
+  {
+    "id": "crli_web_pdf",
+    "source": "eval_crli",
+    "type": "pdf",
+    "url": "https://www.aquabench.de/fileadmin/user_upload/Download-Dateien/Exploring_the_Combined_Real_Loss_Index_final.pdf"
+  }
+]

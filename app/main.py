@@ -139,6 +139,7 @@ def ask(payload: AskRequest):
             source=payload.source,
         )
     except Exception as e:
+        logger.exception("POST /ask failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sources")

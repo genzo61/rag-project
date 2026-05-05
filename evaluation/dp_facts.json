@@ -1,0 +1,132 @@
+[
+  {
+    "id": "wm_01",
+    "source": "eval_water_main_breaks",
+    "text": "The Syracuse study addresses water main failures that were previously handled reactively rather than proactively."
+  },
+  {
+    "id": "wm_02",
+    "source": "eval_water_main_breaks",
+    "text": "The city needed a way to predict the risk of failure on parts of its infrastructure so it could prioritize proactive maintenance."
+  },
+  {
+    "id": "wm_03",
+    "source": "eval_water_main_breaks",
+    "text": "The study used historical failure data, pipe descriptors, and other data sources to predict water main breaks."
+  },
+  {
+    "id": "wm_04",
+    "source": "eval_water_main_breaks",
+    "text": "Gradient boosted decision trees performed best among the tested algorithms and expert heuristics."
+  },
+  {
+    "id": "wm_05",
+    "source": "eval_water_main_breaks",
+    "text": "The best model achieved precision at 1 percent of 0.62, outperforming a random baseline at 0.08, a water-main-age heuristic at 0.10, and past-break history at 0.48."
+  },
+  {
+    "id": "wm_06",
+    "source": "eval_water_main_breaks",
+    "text": "The prediction problem is framed as a binary classification problem: whether a water main break will occur on a given city block within the next three years."
+  },
+  {
+    "id": "wm_07",
+    "source": "eval_water_main_breaks",
+    "text": "That framing helps Syracuse operationalize the model and plan infrastructure development over the next three years."
+  },
+  {
+    "id": "wm_08",
+    "source": "eval_water_main_breaks",
+    "text": "The model contribution includes out-of-sample prediction, temporal cross-validation, and tuning the model to the capacity of the city to intervene."
+  },
+  {
+    "id": "wm_09",
+    "source": "eval_water_main_breaks",
+    "text": "The city planned to use the system for preventative maintenance on the top 1 percent of the riskiest mains."
+  },
+  {
+    "id": "wm_10",
+    "source": "eval_water_main_breaks",
+    "text": "The city also planned to use risk scores to coordinate with the Department of Public Works during road construction and maintenance."
+  },
+  {
+    "id": "wm_11",
+    "source": "eval_water_main_breaks",
+    "text": "One source says there had been 33 breaks among the top 52 predicted city blocks by the end of 2017."
+  },
+  {
+    "id": "wm_12",
+    "source": "eval_water_main_breaks",
+    "text": "Public web material for the same project also reports 42 breaks on the riskiest 52 mains, creating a source conflict."
+  },
+  {
+    "id": "wm_13",
+    "source": "eval_water_main_breaks",
+    "text": "The system is described as deployed in the City of Syracuse and also as being field-validated through a pilot or trial."
+  },
+  {
+    "id": "crli_01",
+    "source": "eval_crli",
+    "text": "CRLI stands for Combined Real Loss Index."
+  },
+  {
+    "id": "crli_02",
+    "source": "eval_crli",
+    "text": "CRLI is the geometric mean of two metrics: real losses per connection per day and real losses per mains length."
+  },
+  {
+    "id": "crli_03",
+    "source": "eval_crli",
+    "text": "CRLI is presented as easier than the Infrastructure Leakage Index while staying better balanced across different network structures."
+  },
+  {
+    "id": "crli_04",
+    "source": "eval_crli",
+    "text": "CRLI does not require pressure data or service connection length and can be calculated from operational data utilities already track."
+  },
+  {
+    "id": "crli_05",
+    "source": "eval_crli",
+    "text": "The study uses evidence from utilities in Rhineland-Palatinate and Saarland in Germany."
+  },
+  {
+    "id": "crli_06",
+    "source": "eval_crli",
+    "text": "The presentation reports that CRLI has a strong relationship with ILI, with a fitted model showing R-squared around 0.87."
+  },
+  {
+    "id": "crli_07",
+    "source": "eval_crli",
+    "text": "The presentation says CRLI is weakly but significantly related to connection density and moderately related to mains input, while remaining comparatively robust."
+  },
+  {
+    "id": "crli_08",
+    "source": "eval_crli",
+    "text": "One slide reports basic descriptive statistics for Rhineland-Palatinate with an average CRLI of 7.16 and a median of 6.14."
+  },
+  {
+    "id": "crli_09",
+    "source": "eval_crli",
+    "text": "A wrap-up slide appears to cite a mean of about 6.14 for Rhineland-Palatinate, which conflicts with the earlier average of 7.16."
+  },
+  {
+    "id": "crli_10",
+    "source": "eval_crli",
+    "text": "One slide reports basic descriptive statistics for Saarland with an average CRLI of 7.65 and a median of 7.79."
+  },
+  {
+    "id": "crli_11",
+    "source": "eval_crli",
+    "text": "A wrap-up slide appears to cite a mean of about 7.79 for Saarland, which conflicts with the earlier average of 7.65."
+  },
+  {
+    "id": "crli_12",
+    "source": "eval_crli",
+    "text": "Possible preliminary CRLI reference bands are low below 10, moderate from 10 to 20, and high above 20, but the slide warns these values are only indicative and may require local validation."
+  },
+  {
+    "id": "crli_13",
+    "source": "eval_crli",
+    "text": "CRLI supports fair benchmarking and can help regulation and incentive schemes without requiring complex extra data."
+  }
+]

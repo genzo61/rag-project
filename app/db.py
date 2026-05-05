@@ -153,7 +153,25 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
     if source:
         source = normalize_source(source)
 
-    sql = """
+    params: tuple[Any, ...]
+    if source:
+        sql = """
+        SELECT
+            id,
+            source,
+            page_start,
+            page_end,
+            chunk_index,
+            content,
+            1 - (embedding <=> %s::vector) AS similarity
+        FROM documents
+        WHERE source = %s
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s;
+        """
+        params = (embedding_str, source, embedding_str, limit)
+    else:
+        sql = """
     SELECT
         id,
         source,
@@ -166,11 +184,12 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
     ORDER BY embedding <=> %s::vector
     LIMIT %s;
     """
+        params = (embedding_str, embedding_str, limit)
 
     start = perf_counter()
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, (embedding_str, embedding_str, limit))
+            cur.execute(sql, params)
             rows = cur.fetchall()
 
     duration_ms = (perf_counter() - start) * 1000

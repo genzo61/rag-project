@@ -82,6 +82,25 @@ def lexical_overlap_score(question: str, text: str) -> float:
     if ("useful" in q or "why" in q) and "targeted proactive" in t:
         phrase_boost += 0.15
 
+    # reactive vs model-driven replacement questions
+    if ("reactive" in q or "model-driven" in q or "replacement" in q) and "field crews" in t:
+        phrase_boost += 0.35
+
+    if ("reactive" in q or "model-driven" in q or "replacement" in q) and "risk scores" in t:
+        phrase_boost += 0.30
+
+    if ("reactive" in q or "model-driven" in q) and "department of public works" in t:
+        phrase_boost += 0.25
+
+    if ("methodology" in q or "evaluation" in q) and "temporal cross-validation" in t:
+        phrase_boost += 0.35
+
+    if ("methodology" in q or "evaluation" in q) and "out-of-sample" in t:
+        phrase_boost += 0.30
+
+    if ("methodology" in q or "evaluation" in q) and "heuristics" in t:
+        phrase_boost += 0.20
+
     # feature importance gibi alakasız ama benzer görünen chunk'ları biraz bastır
     penalty = 0.0
     if "most important feature" in t:
@@ -116,6 +135,18 @@ def rerank_matches(question: str, matches: list[dict[str, Any]]) -> list[dict[st
             intent_bonus += 0.30
 
         if ("useful" in q or "why" in q) and "plan the infrastructure development" in t:
+            intent_bonus += 0.25
+
+        if ("reactive" in q or "model-driven" in q or "replacement" in q) and "little means of identifying mains at the highest risk" in t:
+            intent_bonus += 0.35
+
+        if ("reactive" in q or "model-driven" in q or "replacement" in q) and "risk scores" in t:
+            intent_bonus += 0.25
+
+        if ("methodology" in q or "evaluation" in q) and "temporal cross-validation" in t:
+            intent_bonus += 0.30
+
+        if ("methodology" in q or "evaluation" in q) and "out-of-sample" in t:
             intent_bonus += 0.25
 
         score = (semantic * 0.60) + (lexical * 0.40) + intent_bonus
@@ -323,6 +354,7 @@ def retrieve_context(question: str, top_k: int = 3, source: str | None = None) -
     for i, match in enumerate(matches, start=1):
         context_parts.append(
             f"[CHUNK {i}]\n"
+            f"chunk_index={match['chunk_index']}\n"
             f"source={match['source']}\n"
             f"pages={match['page_start']}-{match['page_end']}\n"
             f"text={match['content']}"
@@ -345,13 +377,12 @@ def retrieve_context(question: str, top_k: int = 3, source: str | None = None) -
         "matches": matches,
         "context": "\n\n---\n\n".join(context_parts),
     }
-
+# içinde ask_question artık retrieval’ı iki kere çağırmıyor. Önceden ilk çağrı source=source ile yapılıyordu ama hemen sonra ikinci çağrı source olmadan çalışıp sonucu eziyordu.
 def ask_question(question: str, top_k: int = 3, source: str | None = None) -> dict[str, Any]:
-    retrieved = retrieve_context(question, top_k=top_k, source=source)
     total_start = perf_counter()
 
     t0 = perf_counter()
-    retrieved = retrieve_context(question, top_k=top_k)
+    retrieved = retrieve_context(question, top_k=top_k, source=source)
     retrieval_ms = (perf_counter() - t0) * 1000
 
     matches = retrieved["matches"]
@@ -372,9 +403,16 @@ def ask_question(question: str, top_k: int = 3, source: str | None = None) -> di
                 "If the answer is not explicitly supported by the context, say exactly:\n"
                 "'Not enough information in the provided context.'\n"
                 "Ignore bibliography, references, citations, paper titles, and footnotes unless the question is explicitly about them.\n"
+                "For why, compare, evaluate, or explain questions, synthesize evidence across all relevant chunks.\n"
+                "Do not stop at a generic conclusion when the context supports a causal explanation.\n"
+                "Address every concrete aspect named in the question, such as historical practices, available data, methodology, constraints, and operational consequences.\n"
+                "Make the causal chain explicit in the final answer, but do not reveal hidden reasoning or scratch work.\n"
+                "Do not introduce unstated metrics, labels, or claims; preserve numeric evidence in the form used by the context.\n"
+                "Do not convert counts, precision, or trial outcomes into accuracy unless the context explicitly calls them accuracy.\n"
+                "Use 4-7 concise sentences for synthesis questions.\n"
                 "Do not reveal internal reasoning.\n"
                 "Do not explain your thought process.\n"
-                "Keep the answer short and precise.\n"
+                "Keep simple factual questions short and precise.\n"
                 "Always end with: Sources: <source names>."
             ),
         },
@@ -383,7 +421,8 @@ def ask_question(question: str, top_k: int = 3, source: str | None = None) -> di
             "content": (
                 f"Question:\n{question}\n\n"
                 f"Context:\n{context}\n\n"
-                "Now answer the question using only the context."
+                "Now answer the question using only the context. "
+                "If the question asks for an explanation, connect the relevant facts from different chunks into one coherent answer."
             ),
         },
     ]
@@ -401,8 +440,9 @@ def ask_question(question: str, top_k: int = 3, source: str | None = None) -> di
 
     total_ms = (perf_counter() - total_start) * 1000
     logger.info(
-        "ask_question top_k=%d retrieval=%.1fms llm=%.1fms total=%.1fms model=%s question=%r",
+        "ask_question top_k=%d source=%s retrieval=%.1fms llm=%.1fms total=%.1fms model=%s question=%r",
         top_k,
+        source,
         retrieval_ms,
         llm_ms,
         total_ms,

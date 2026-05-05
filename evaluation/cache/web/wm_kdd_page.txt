@@ -1,0 +1,542 @@
+A PHP Error was encountered 
+
+ Severity: 8192 
+ Message: Non-static method URL_tube::usage() should not be called statically, assuming $this from incompatible context 
+ Filename: url_tube/pi.url_tube.php 
+ Line Number: 13 
+
+ 
+ 
+ 
+ 
+ KDD 2018 | Using Machine Learning to Assess the Risk of and Prevent Water Main Breaks 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+
+ 
+
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 
+ Home 
+ 
+ 
+
+ 
+ 
+ Program
+ 
+
+ 
+ 
+ 
+ 
+ 
+ '
+ 
+ Program Booklet (pdf) 
+ 
+ 
+ 
+ Session Feedback 
+ 
+ 
+ Keynote Speakers 
+ 
+ 
+ Applied Data Science Invited Speakers 
+ 
+ 
+ Conventional Tutorials 
+ 
+ 
+ 
+ Hands-On Tutorials 
+ 
+ 
+ Workshops 
+ 
+ 
+ 
+ 
+ 
+ Project Showcase Track 
+ 
+ 
+ 
+ Plenary Panel 
+ 
+ 
+ Applied Data Science Invited Panel 
+ 
+ 
+ Global AI Initiatives 
+ 
+ 
+ 
+ Health Day at KDD 
+ 
+ 
+ Deep Learning Day 
+ 
+ 
+ By Application: Round Table Event 
+ 
+ 
+ Networking With Experts 
+ 
+ 
+ Accepted Papers 
+ 
+ 
+ Poster Preparation Instructions 
+ 
+ 
+ 
+ Job Match at KDD 2018 
+ 
+ 
+ KDD2018 Agenda (pdf download) 
+ 
+ 
+ Get Whova 
+ 
+
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Attending
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Registration 
+ 
+ 
+ Conference Venue 
+ 
+ 
+ Travel Information 
+ 
+ 
+ 
+ Accommodations & Special Rates 
+ 
+ 
+ Visa Support Letters 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Calls 
+ 
+ 
+ 
+ Sponsors 
+ 
+ 
+ 
+ 
+ 
+ Organizers 
+ 
+ 
+ 
+ Organizing Committee 
+ 
+
+ 
+ 
+ ADS Track Program Committee 
+ 
+ 
+ 
+ Research Track Program Committee 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ KDD Cup 
+ 
+ 
+ 
+ 
+
+ 
+
+ 
+ 
+ 
+ Contact Us 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Accepted Papers 
+ 
+
+ 
+ 
+ 
+ Home 
+ / 
+ 
+ 
+ Accepted Papers 
+ / 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Using Machine Learning to Assess the Risk of and Prevent Water Main Breaks Avishek Kumar (The University of Chicago); Syed Ali Asad Rizvi (University of Oxford); Benjamin Brooks (University of Chicago); Ali Vanderveld (ShopRunner); Kevin Hayes Wilson (The Lab @ DC); Chad Kenney (City of Denver, CO); Adria Finch (City of Syracuse, NY); Andrew Maxwell (City of Syracuse, NY); Sam Edelstein (City of Syracuse, NY); Joe Zuckerbraun (City of Syracuse, NY); Rayid Ghani (University of Chicago) 
+ 
+ Water infrastructure in the United States is beginning to show its age, particularly through water main breaks. Main breaks cause major disruptions in everyday life for residents and businesses. Water main failures in Syracuse, N.Y. (as in most cities) are handled reactively rather than proactively. A barrier to proactive maintenance with limited resources is the city’s inability to properly prioritize the allocation of its resources. We built a Machine Learning system to assess the risk of a water mains breaking. Using historical data on which mains have failed, descriptors of pipes, and other data sources, we evaluated several models’ abilities to predict breaks three years into the future. Our results show that our system using gradient boosted decision trees performed best out of several algorithms and expert heuristics, achieving precision at 1% ([email protected]) of 0.62. Our model outperforms a random baseline (P@1 of 0.08) and expert heuristics such as water main age (P@1 of 0.10) and history of past main breaks (P@1 of 0.48). The model is currently deployed in the City of Syracuse. We are conducting a pilot by calculating the risk of failure for each city block over the period 2016-2018 using data up to the end of 2015 and, as of the end of 2017, there have been 42 breaks on our riskiest 52 mains. This has been a successful initiative for the city of Syracuse in improving its infrastructure and we believe this approach can be applied to other cities. 
+ 
+ 
+ Download Full Paper
+ 
+ 
+ Promotional Video 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ Sponsors 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ View All Sponsors Sponsor KDD 2018 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+
+ 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+ 2017 © All Rights Reserved 
+ 
+ 
+ | 
+ 
+ 
+ ACM Code of Conduct
