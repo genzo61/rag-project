@@ -1,6 +1,6 @@
 import logging
 
-from .db import delete_by_source, insert_documents_batch, search_similar
+from .db import count_documents_by_source, delete_by_source, insert_documents_batch
 from .embeddings import get_embedding
 
 logger = logging.getLogger("rag.dp_knowledge_seed")
@@ -107,9 +107,8 @@ def seed_dp_assistant_knowledge(replace_existing: bool = True) -> None:
     if replace_existing:
         delete_by_source(SOURCE)
 
-    probe = get_embedding("Data Processing App vector retrieval")
-    existing = search_similar(probe, limit=3, source=SOURCE)
-    if existing:
+    existing_count = count_documents_by_source(SOURCE)
+    if existing_count > 0:
         logger.info("dp assistant knowledge already seeded")
         return
 

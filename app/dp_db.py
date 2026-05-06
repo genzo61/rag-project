@@ -28,6 +28,67 @@ def _fetch_rows(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
             return [dict(row) for row in cur.fetchall()]
 
 
+def _question_has_any(question: str, tokens: tuple[str, ...]) -> bool:
+    q = (question or "").lower()
+    return any(token in q for token in tokens)
+
+
+def _extract_named_entity_before_keywords(question: str, keywords: tuple[str, ...]) -> str | None:
+    q = (question or "").strip()
+
+    quoted = re.search(r"['\"]([^'\"]+)['\"]", q)
+    if quoted:
+        return quoted.group(1).strip()
+
+    for keyword in keywords:
+        pattern = rf"([a-zA-Z0-9_.-]+)\s+{re.escape(keyword)}"
+        match = re.search(pattern, q, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+    return None
+
+
+def _extract_contains_name_filter(question: str) -> str | None:
+    q = question or ""
+    match = re.search(r"adı\s+([a-zA-Z0-9_.-]+)\s+geçen", q, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _extract_interval_filter(question: str) -> tuple[int, str] | None:
+    q = (question or "").lower()
+
+    minute_match = re.search(r"(\d+)\s*(?:dk|dakika)", q)
+    if minute_match:
+        return int(minute_match.group(1)), "minute"
+
+    hour_match = re.search(r"(\d+)\s*saat", q)
+    if hour_match:
+        return int(hour_match.group(1)), "hour"
+
+    return None
+
+
+def _extract_datapoint_filter(question: str) -> str | None:
+    q = question or ""
+
+    quoted = re.search(r"datapoint[^\w]*['\"]([^'\"]+)['\"]", q, re.IGNORECASE)
+    if quoted:
+        return quoted.group(1).strip()
+
+    around = re.search(r"([a-zA-Z0-9_.-]+)\s+datapoint", q, re.IGNORECASE)
+    if around:
+        return around.group(1).strip()
+
+    explicit = re.search(r"datapoint[^\w]*([a-zA-Z0-9_.-]+)", q, re.IGNORECASE)
+    if explicit:
+        return explicit.group(1).strip()
+
+    return None
+
+
 def _extract_package_name(question: str) -> str | None:
     known = re.search(
         r"(@[a-z0-9_.-]+/[a-z0-9_.-]+|left-pad|leftpad|is-number|event-stream|lodash|react|express|axios)",
@@ -88,6 +149,13 @@ def _is_aggregation_question(question: str) -> bool:
             "audit trail",
             "window start",
             "window end",
+            "aggregationrunaudit",
+            "aktif aggregation",
+            "başarısız aggregation",
+            "failed olan",
+            "1 saatlik",
+            "30 dk",
+            "30 dakika",
         )
     )
 
@@ -121,6 +189,9 @@ def _is_formula_question(question: str) -> bool:
             "formula variables",
             "snapshot",
             "bulk formula",
+            "formülü",
+            "formül",
+            "formüller",
         )
     )
 
@@ -175,6 +246,118 @@ def _query_npm_data(question: str, limit: int = 12) -> dict[str, Any]:
 
 
 def _query_aggregation_data(question: str, limit: int = 12) -> dict[str, Any]:
+    q = (question or "").lower()
+    interval_filter = _extract_interval_filter(question)
+
+    if _question_has_any(question, ("kaç tane", "sayısı kaç", "kaç aggregation")):
+        sql = """
+        SELECT COUNT(*) AS aggregation_rule_count
+        FROM aggregation_rule
+        """
+        if _question_has_any(question, ("aktif", "enabled")):
+            sql += " WHERE enabled = true"
+        rows = _fetch_rows(sql, ())
+        return {
+            "ok": True,
+            "domain": "aggregation",
+            "rows": rows,
+        }
+
+    if _question_has_any(question, ("en son çalışan", "son çalışan", "latest run", "most recent run")):
+        sql = """
+        SELECT
+            ar.id AS rule_id,
+            ar.name AS rule_name,
+            ara.started_at,
+            ara.completed_at,
+            ara.status,
+            ara.processed_count,
+            ara.inserted_count,
+            ara.message
+        FROM aggregation_rule ar
+        JOIN aggregation_run_audit ara ON ara.rule_id = ar.id
+        ORDER BY ara.started_at DESC NULLS LAST, ara.id DESC
+        LIMIT 1
+        """
+        rows = _fetch_rows(sql, ())
+        return {
+            "ok": True,
+            "domain": "aggregation",
+            "rows": rows,
+        }
+
+    if _question_has_any(question, ("başarısız", "failed", "status'u failed")):
+        sql = """
+        SELECT
+            ar.id AS rule_id,
+            ar.name AS rule_name,
+            ara.window_start,
+            ara.window_end,
+            ara.started_at,
+            ara.completed_at,
+            ara.status,
+            ara.processed_count,
+            ara.inserted_count,
+            ara.message
+        FROM aggregation_rule ar
+        JOIN aggregation_run_audit ara ON ara.rule_id = ar.id
+        WHERE upper(coalesce(ara.status, '')) = 'FAILED'
+        ORDER BY ara.started_at DESC NULLS LAST, ara.id DESC
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (limit,))
+        return {
+            "ok": True,
+            "domain": "aggregation",
+            "rows": rows,
+        }
+
+    if _question_has_any(question, ("average method", "average method kullanan", "method kullanan")):
+        sql = """
+        SELECT
+            ar.id AS rule_id,
+            ar.name AS rule_name,
+            ar.interval_value,
+            ar.interval_unit,
+            ar.method,
+            ar.enabled,
+            ar.last_calculated_at
+        FROM aggregation_rule ar
+        WHERE lower(coalesce(ar.method, '')) = 'average'
+        ORDER BY ar.id
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (limit,))
+        return {
+            "ok": True,
+            "domain": "aggregation",
+            "rows": rows,
+        }
+
+    if interval_filter:
+        sql = """
+        SELECT
+            ar.id AS rule_id,
+            ar.name AS rule_name,
+            ar.interval_value,
+            ar.interval_unit,
+            ar.method,
+            ar.gap_filling_mode,
+            ar.enabled,
+            ar.last_calculated_at
+        FROM aggregation_rule ar
+        WHERE ar.interval_value = %s
+          AND lower(ar.interval_unit) = lower(%s)
+        ORDER BY ar.id
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (interval_filter[0], interval_filter[1], limit))
+        return {
+            "ok": True,
+            "domain": "aggregation",
+            "rows": rows,
+        }
+
     sql = """
     SELECT
         ar.id AS rule_id,
@@ -254,6 +437,153 @@ def _query_validation_data(question: str, limit: int = 20) -> dict[str, Any]:
 
 
 def _query_formula_data(question: str, limit: int = 20) -> dict[str, Any]:
+    formula_name = _extract_named_entity_before_keywords(question, ("formülü", "formülünün", "formula", "formul"))
+    name_contains = _extract_contains_name_filter(question)
+
+    if _question_has_any(question, ("kaç tane", "kaç formula", "kaç formül", "sistemde kaç tane formula")):
+        sql = "SELECT COUNT(*) AS formula_count FROM formula"
+        rows = _fetch_rows(sql, ())
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
+    if _question_has_any(question, ("en son oluşturulan", "son oluşturulan", "latest formula")):
+        sql = """
+        SELECT
+            f.id AS formula_id,
+            f.name AS formula_name,
+            f.formula_text
+        FROM formula f
+        ORDER BY f.id DESC
+        LIMIT 1
+        """
+        rows = _fetch_rows(sql, ())
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
+    if _question_has_any(question, ("bulk formula", "bulk olarak", "bulk formula olarak")):
+        sql = """
+        SELECT
+            bf.id AS bulk_formula_id,
+            bf.name AS bulk_formula_name,
+            bfg.group_key,
+            bfg.group_name,
+            bfg.result_data_id,
+            bfgm.variable_name AS group_variable_name,
+            bfgm.datapoint_id AS group_datapoint_id
+        FROM bulk_formula bf
+        LEFT JOIN bulk_formula_group bfg ON bfg.bulk_formula_id = bf.id
+        LEFT JOIN bulk_formula_group_mapping bfgm ON bfgm.group_id = bfg.id
+        ORDER BY bf.id, bfg.group_key, bfgm.variable_name
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (limit,))
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
+    if name_contains:
+        sql = """
+        SELECT
+            f.id AS formula_id,
+            f.name AS formula_name,
+            f.formula_text
+        FROM formula f
+        WHERE lower(f.name) LIKE lower(%s)
+        ORDER BY f.id
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (f"%{name_contains}%", limit))
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
+    if formula_name and _question_has_any(question, ("hangi datapoint", "datapointlere bağlı", "bağlı", "bagli")):
+        sql = """
+        SELECT
+            f.id AS formula_id,
+            f.name AS formula_name,
+            fv.variable_name,
+            fv.datapoint_id
+        FROM formula f
+        LEFT JOIN formula_variable fv ON fv.formula_id = f.id
+        WHERE lower(f.name) = lower(%s)
+        ORDER BY fv.variable_name
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (formula_name, limit))
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
+    if formula_name and _question_has_any(question, ("formula text", "formula text'i", "formula texti", "formula_text", "text'i ne", "texti ne")):
+        sql = """
+        SELECT
+            f.id AS formula_id,
+            f.name AS formula_name,
+            f.formula_text
+        FROM formula f
+        WHERE lower(f.name) = lower(%s)
+        LIMIT 1
+        """
+        rows = _fetch_rows(sql, (formula_name,))
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
+    if formula_name and _question_has_any(question, ("en son hesaplanan sonucu", "son hesaplanan sonucu", "sonuç var mı", "sonuc var mi", "snapshot")):
+        sql = """
+        SELECT
+            f.id AS formula_id,
+            f.name AS formula_name,
+            frs.chart_data_id,
+            frs.result_value,
+            frs.computed_at
+        FROM formula f
+        LEFT JOIN formula_result_snapshot frs ON frs.formula_id = f.id
+        WHERE lower(f.name) = lower(%s)
+        ORDER BY frs.computed_at DESC NULLS LAST
+        LIMIT 1
+        """
+        rows = _fetch_rows(sql, (formula_name,))
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
+    if _question_has_any(question, ("en çok variable", "en cok variable", "most variables")):
+        sql = """
+        SELECT
+            f.id AS formula_id,
+            f.name AS formula_name,
+            COUNT(fv.id) AS variable_count
+        FROM formula f
+        LEFT JOIN formula_variable fv ON fv.formula_id = f.id
+        GROUP BY f.id, f.name
+        ORDER BY variable_count DESC, f.id DESC
+        LIMIT 1
+        """
+        rows = _fetch_rows(sql, ())
+        return {
+            "ok": True,
+            "domain": "formula",
+            "rows": rows,
+        }
+
     sql = """
     SELECT
         f.id AS formula_id,
