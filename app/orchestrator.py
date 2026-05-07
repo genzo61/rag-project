@@ -8,6 +8,7 @@ from typing import Any, cast
 from .db import count_documents
 from .dp_db import build_dp_db_context, query_internal_data
 from .rag import (
+    PRIMARY_LLM_MODEL,
     _build_model_candidates,
     _public_web_results,
     _rerank_web_results,
@@ -17,6 +18,7 @@ from .rag import (
     retrieve_context,
     web_search,
 )
+from .math_tool_orchestrator import run_math_tool_conversation
 
 logger = logging.getLogger("rag.orchestrator")
 
@@ -44,6 +46,340 @@ def _extract_known_package_name(question: str) -> str | None:
             return match.group(1).strip().lower()
 
     return None
+
+
+PACKAGE_HINTS = (
+    "npm",
+    "package",
+    "release",
+    "version",
+    "published",
+    "npmjs",
+    "left-pad",
+    "leftpad",
+    "lodash",
+    "event-stream",
+    "is-number",
+)
+
+EXPLICIT_WEB_PATTERNS = (
+    "search on web",
+    "search the web",
+    "search web",
+    "use web",
+    "from web",
+    "on the web",
+    "web search",
+    "search online",
+    "look it up online",
+    "look it up on the web",
+    "internette ara",
+    "webde ara",
+    "webden bul",
+)
+
+GENERAL_MATH_FORMULA_TERMS = (
+    "arithmetic mean",
+    "aritmetic mean",
+    "average formula",
+    "mean formula",
+    "geometric mean",
+    "harmonic mean",
+    "weighted mean",
+    "median formula",
+    "mode formula",
+)
+
+GENERAL_MATH_TASK_TERMS = (
+    "calculate",
+    "compute",
+    "solve",
+    "sum",
+    "average",
+    "mean",
+    "median",
+    "weighted mean",
+    "percentage",
+    "percent",
+    "ratio",
+    "difference",
+    "divide",
+    "multiply",
+    "plus",
+    "minus",
+    "total",
+)
+
+MATH_ROUTER_SYSTEM_PROMPT = """You are a routing model inside an orchestrator.
+
+Decide whether a Python math tool is required for the user's question.
+
+Return strict JSON with keys:
+- use_math_tool: boolean
+- reason: short string
+
+Use the math tool when the user needs exact arithmetic, symbolic math formulas, percentages, averages, medians, weighted means, multi-step calculations, or deterministic numeric computation.
+Do not use the math tool for package/version lookup, document retrieval, internal audit questions, or ordinary RAG/web-search questions.
+
+Examples:
+- "What is 125 + 349?" -> use_math_tool=true
+- "Calculate (18.75 * 4) + 12.5." -> use_math_tool=true
+- "Find the arithmetic mean of 12, 18, 24, and 30." -> use_math_tool=true
+- "What is the latest npm version of left-pad?" -> use_math_tool=false
+"""
+
+
+def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in phrases)
+
+
+def _explicitly_requests_web(question: str) -> bool:
+    return _contains_any(question, EXPLICIT_WEB_PATTERNS)
+
+
+def _is_general_math_formula_query(question: str) -> bool:
+    q = (question or "").lower()
+    asks_math_term = any(term in q for term in GENERAL_MATH_FORMULA_TERMS)
+    asks_how = any(token in q for token in ("how", "nedir", "nasil", "nasıl", "formula", "calculate", "find"))
+    asks_internal = any(
+        token in q
+        for token in (
+            "audit",
+            "metadata",
+            "validation",
+            "snapshot",
+            "formula variable",
+            "bulk formula",
+            "job",
+            "jobs",
+            "processing",
+            "internal",
+            "dp db",
+        )
+    )
+    return asks_math_term and asks_how and not asks_internal
+
+
+def _is_math_tool_candidate(question: str) -> bool:
+    q = (question or "").lower().strip()
+    if not q:
+        return False
+
+    if _extract_known_package_name(question):
+        return False
+
+    if any(
+        token in q
+        for token in (
+            "cve",
+            "github",
+            "validation result",
+            "audit history",
+            "processing job",
+            "water main",
+            "crli",
+            "ili",
+        )
+    ):
+        return False
+
+    if _is_general_math_formula_query(question):
+        return True
+
+    has_math_symbols = bool(re.search(r"\d", q) and re.search(r"[\+\-\*/%=()]", q))
+    has_math_language = any(term in q for term in GENERAL_MATH_TASK_TERMS)
+    return has_math_symbols or has_math_language
+
+
+def _parse_router_json(text: str) -> dict[str, Any] | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    try:
+        return json.loads(raw)
+    except Exception:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            return None
+
+
+def _route_question_for_math_tool(question: str) -> dict[str, Any]:
+    last_error: Exception | None = None
+
+    for model_name in _build_model_candidates():
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=cast(
+                    Any,
+                    [
+                        {"role": "system", "content": MATH_ROUTER_SYSTEM_PROMPT},
+                        {"role": "user", "content": question},
+                    ],
+                ),
+                temperature=0.0,
+                max_tokens=80,
+            )
+            content = response.choices[0].message.content or ""
+            parsed = _parse_router_json(content)
+            if not parsed or "use_math_tool" not in parsed:
+                raise ValueError(f"Invalid router JSON: {content}")
+
+            route_decision = bool(parsed.get("use_math_tool"))
+            route_reason = str(parsed.get("reason") or "").strip()
+            if not route_decision and _is_math_tool_candidate(question):
+                route_decision = True
+                route_reason = "validated math route override"
+
+            return {
+                "ok": True,
+                "model_used": model_name,
+                "use_math_tool": route_decision,
+                "reason": route_reason,
+                "raw_content": content,
+                "fallback_used": route_reason == "validated math route override",
+            }
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "orchestrator_math_router_failed model=%s error=%s",
+                model_name,
+                exc,
+            )
+
+    fallback_decision = _is_math_tool_candidate(question)
+    return {
+        "ok": False,
+        "model_used": PRIMARY_LLM_MODEL,
+        "use_math_tool": fallback_decision,
+        "reason": "fallback heuristic after routing failure",
+        "raw_content": "",
+        "fallback_used": True,
+        "error": str(last_error) if last_error else "unknown router error",
+    }
+
+
+def _answer_with_math_tool(question: str, route_info: dict[str, Any]) -> dict[str, Any]:
+    last_error: Exception | None = None
+
+    for model_name in _build_model_candidates():
+        try:
+            math_result = run_math_tool_conversation(
+                client=client,
+                model=model_name,
+                question=question,
+            )
+            tool_called = bool(math_result.get("tool_called"))
+            tool_events = math_result.get("tool_events", [])
+            answer = (math_result.get("final_answer") or "").strip()
+
+            if not answer and tool_called and tool_events:
+                last_tool_result = tool_events[-1].get("tool_result", {})
+                if last_tool_result.get("ok"):
+                    answer = str(last_tool_result.get("formatted_result") or last_tool_result.get("result") or "").strip()
+
+            return {
+                "question": question,
+                "answer": answer or "I could not produce a math answer.",
+                "sources_used": ["math_tool"] if tool_called else [],
+                "vector_queried_first": False,
+                "model_used": model_name,
+                "tool_trace": [
+                    {
+                        "order": 1,
+                        "tool": "math_router",
+                        "used": True,
+                        "result_count": 1,
+                        "router_model": route_info.get("model_used"),
+                        "fallback_used": route_info.get("fallback_used", False),
+                        "decision": route_info.get("use_math_tool"),
+                        "reason": route_info.get("reason"),
+                    },
+                    {
+                        "order": 2,
+                        "tool": "math_tool_orchestrator",
+                        "used": True,
+                        "tool_called": tool_called,
+                        "result_count": len(tool_events),
+                        "duration_ms": math_result.get("duration_ms"),
+                    },
+                ],
+                "retrieved_chunks": [],
+                "dp_db_results": [],
+                "web_sources": [],
+                "math_tool_trace": tool_events,
+                "duration_ms": math_result.get("duration_ms"),
+            }
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "orchestrator_math_tool_model_failed model=%s error=%s",
+                model_name,
+                exc,
+            )
+
+    return {
+        "question": question,
+        "answer": f"Temporary math tool error: {last_error}",
+        "sources_used": [],
+        "vector_queried_first": False,
+        "model_used": PRIMARY_LLM_MODEL,
+        "tool_trace": [
+            {
+                "order": 1,
+                "tool": "math_router",
+                "used": True,
+                "result_count": 1,
+                "router_model": route_info.get("model_used"),
+                "fallback_used": route_info.get("fallback_used", False),
+                "decision": route_info.get("use_math_tool"),
+                "reason": route_info.get("reason"),
+            },
+            {
+                "order": 2,
+                "tool": "math_tool_orchestrator",
+                "used": True,
+                "tool_called": False,
+                "result_count": 0,
+                "error": str(last_error) if last_error else "unknown error",
+            },
+        ],
+        "retrieved_chunks": [],
+        "dp_db_results": [],
+        "web_sources": [],
+        "math_tool_trace": [],
+        "duration_ms": None,
+    }
+
+
+def _is_public_current_package_query(question: str) -> bool:
+    q = (question or "").lower()
+    asks_current = any(token in q for token in ("latest", "current", "recent", "release", "version", "published"))
+    asks_package = bool(_extract_known_package_name(question)) or any(token in q for token in PACKAGE_HINTS)
+    asks_internal = any(
+        token in q
+        for token in (
+            "audit",
+            "metadata",
+            "processing failure",
+            "validation",
+            "cross-reference",
+            "cross reference",
+            "internal",
+            "job",
+            "jobs",
+            "status",
+            "quarantine",
+            "owner",
+        )
+    )
+    return asks_current and asks_package and not asks_internal
 
 
 def _trim_conversation_context(conversation_context: str | None, max_chars: int = 1200) -> str:
@@ -361,7 +697,6 @@ def _routing_tokens(text: str) -> set[str]:
         for token in re.findall(r"[a-z0-9]+", (text or "").lower())
         if len(token) >= 3
     }
-
 
 def _looks_like_orchestration_guidance_chunk(content: str) -> bool:
     text = (content or "").lower()
@@ -789,10 +1124,11 @@ def _call_llm(
     ), used_model
 
 def _build_web_query(question: str) -> str:
-    q = (question or "").lower()
+    original = (question or "").strip()
+    q = original.lower()
     security_lookup = any(token in q for token in ("security", "advisory", "vulnerability", "cve"))
     version_lookup = any(token in q for token in ("latest", "version", "npm"))
-    package_name = _extract_known_package_name(q)
+    package_name = _extract_known_package_name(question)
 
     if package_name:
         if security_lookup:
@@ -801,12 +1137,20 @@ def _build_web_query(question: str) -> str:
             return f"{package_name} npm latest version"
         return f"{package_name} npm package"
 
-    if "left-pad" in q and "left-pad" not in q and "leftpad" not in q:
-        return "left-pad npm latest version"
-    if "leftpad" in q and "left-pad" not in q:
-        return "left-pad npm latest version"
-
-    return question
+    cleaned = re.sub(
+        r"\b(search (on )?web|search the web|use web|from web|on the web|web search|search online)\b",
+        "",
+        original,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\b(internette ara|webde ara|webden bul)\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ?")
+    return cleaned or original
 
 
 
@@ -977,10 +1321,25 @@ def answer_chat(
     conversation_context: str | None = None,
 ) -> dict[str, Any]:
     total_start = perf_counter()
-    tool_trace = []
     effective_source = _normalize_source_for_chat(source)
     effective_question = _build_effective_question(question, conversation_context)
     conversation_reference = _build_conversation_reference_block(conversation_context)
+    math_route = _route_question_for_math_tool(effective_question)
+    if math_route.get("use_math_tool"):
+        return _answer_with_math_tool(question, math_route)
+
+    tool_trace = [
+        {
+            "order": 1,
+            "tool": "math_router",
+            "used": True,
+            "result_count": 1,
+            "router_model": math_route.get("model_used"),
+            "fallback_used": math_route.get("fallback_used", False),
+            "decision": math_route.get("use_math_tool"),
+            "reason": math_route.get("reason"),
+        }
+    ]
 
     vector_result = _query_vector_first(
         question=effective_question,
@@ -991,7 +1350,7 @@ def answer_chat(
 
     tool_trace.append(
         {
-            "order": 1,
+            "order": 2,
             "tool": "vector_db",
             "used": True,
             "result_count": len(vector_matches),
@@ -1020,6 +1379,22 @@ def answer_chat(
             "route": "web",
             "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.78),
             "reason": "Internal vector evidence is not sufficient, so the question is routed to web search.",
+        }
+    elif _explicitly_requests_web(question):
+        selected_route = "web"
+        route_decision = {
+            **route_decision,
+            "route": "web",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.85),
+            "reason": "The user explicitly requested a web lookup, so the question is routed to web search.",
+        }
+    elif _is_public_current_package_query(effective_question) and not effective_source:
+        selected_route = "web"
+        route_decision = {
+            **route_decision,
+            "route": "web",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.8),
+            "reason": "Current public package version or advisory questions should be answered with web evidence.",
         }
     public_web_only = selected_route == "web"
     use_dp_db = selected_route == "vector_and_dp_db"
@@ -1067,6 +1442,9 @@ def answer_chat(
         web_results = _rerank_web_results(effective_question, web_results)[:web_top_k]
         web_results = _filter_package_web_results(effective_question, web_results)
         web_context = build_web_context(web_results)
+
+        if not web_results:
+            logger.info("orchestrator_web_search_empty query=%r rewritten_query=%r", question, web_query)
 
 
     tool_trace.append(

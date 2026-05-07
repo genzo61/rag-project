@@ -51,7 +51,8 @@ from app.embeddings import get_embedding
 from app.pdf_utils import extract_pdf_pages
 from app.rag import dedupe_matches, looks_like_reference_chunk, rerank_matches, ingest_pdf
 
-load_dotenv()
+ENV_PATH = ROOT / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_CHAT_MODEL = os.getenv("OPENROUTER_CHAT_MODEL", "openrouter/free")
