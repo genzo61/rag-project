@@ -1,3 +1,4 @@
+import json
 import re
 import logging
 from time import perf_counter
@@ -19,124 +20,9 @@ from .rag import (
 
 logger = logging.getLogger("rag.orchestrator")
 
-DP_DB_KEYWORDS = (
-    "audit",
-    "history",
-    "hidden",
-    "metadata",
-    "processing failure",
-    "failure",
-    "validation",
-    "cross-reference",
-    "cross reference",
-    "internal",
-    "join",
-    "owner",
-    "status",
-    "npm package",
-    "package",
-    "audit history",
-    "hidden metadata",
-    "processing failures",
-    "validation results",
-)
-
-WEB_KEYWORDS = (
-    "latest",
-    "current",
-    "today",
-    "now",
-    "recent",
-    "release",
-    "cve",
-    "vulnerability",
-    "security advisory",
-    "npm",
-    "npmjs",
-    "github",
-    "güncel",
-    "guncel",
-    "son sürüm",
-    "son surum",
-    "bugün",
-    "bugun",
-)
-
-DP_VECTOR_HINTS = (
-    "query the data processing db",
-    "requires querying the data processing db",
-    "structured internal data",
-    "structured/internal data",
-    "structured/internal facts",
-    "internal structured data",
-    "audit history",
-    "hidden metadata",
-    "processing failures",
-    "validation results",
-    "cross-reference",
-    "cross reference",
-    "npm package processing jobs",
-)
-
-WEB_VECTOR_HINTS = (
-    "query web search",
-    "requires web search",
-    "external or current data",
-    "external/current data",
-    "external or current facts",
-    "current external data",
-    "current facts",
-    "latest npm package versions",
-    "current cves",
-    "current release notes",
-    "security advisories",
-    "recent ecosystem information",
-)
-
-PUBLIC_INFO_PATTERNS = (
-    "how old",
-    "kaç yaş",
-    "kaç yaşında",
-    "kimdir",
-    "kim bu",
-    "who is",
-    "where is",
-    "where does",
-    "hangi takım",
-    "which team",
-    "president",
-    "prime minister",
-    "capital of",
-    "nerede",
-    "nereli",
-    "doğum tarihi",
-    "birth date",
-    "birthday",
-    "married",
-    "spouse",
-)
-
-INTERNAL_APP_PATTERNS = (
-    "data processing",
-    "vector db",
-    "dp db",
-    "our app",
-    "our system",
-    "internal",
-    "aggregation",
-    "formula",
-    "datapoint",
-    "validation",
-    "audit",
-    "metadata",
-    "processing job",
-    "processing status",
-)
-
-def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
-    lowered = (text or "").lower()
-    return any(phrase in lowered for phrase in phrases)
-
+ROUTING_STRONG_VECTOR_THRESHOLD = 0.32
+ROUTING_MIN_VECTOR_THRESHOLD = 0.18
+ROUTING_GUIDANCE_SOURCE = "dp-assistant-demo"
 
 def _extract_known_package_name(question: str) -> str | None:
     q = (question or "").lower()
@@ -432,32 +318,20 @@ def _build_conversation_reference_block(conversation_context: str | None = None)
         f"{history}"
     )
 
-def _vector_requests_dp_db(vector_matches: list[dict[str, Any]]) -> bool:
-    vector_blob = _relevant_vector_blob(vector_matches)
-    return _contains_any(vector_blob, DP_VECTOR_HINTS)
 
-def _vector_requests_web(vector_matches: list[dict[str, Any]]) -> bool:
-    vector_blob = _relevant_vector_blob(vector_matches)
-    return _contains_any(vector_blob, WEB_VECTOR_HINTS)
+def _normalize_source_for_chat(source: str | None) -> str | None:
+    value = (source or "").strip().lower()
+    if not value:
+        return None
 
+    if value == ROUTING_GUIDANCE_SOURCE:
+        logger.info(
+            "ignoring_guidance_source_filter source=%s reason=routing_seed_should_not_constrain_user_questions",
+            source,
+        )
+        return None
 
-def _relevant_vector_blob(
-    vector_matches: list[dict[str, Any]],
-    min_similarity: float = 0.18,
-) -> str:
-    relevant = []
-
-    for match in vector_matches:
-        try:
-            similarity = float(match.get("similarity", 0.0))
-        except Exception:
-            similarity = 0.0
-
-        if similarity >= min_similarity:
-            relevant.append(str(match.get("content", "")))
-
-    return " ".join(relevant).lower()
-
+    return source
 
 def _has_strong_vector_match(vector_matches: list[dict[str, Any]], threshold: float = 0.32) -> bool:
     for match in vector_matches:
@@ -470,205 +344,308 @@ def _has_strong_vector_match(vector_matches: list[dict[str, Any]], threshold: fl
     return False
 
 
-def _looks_like_internal_app_question(question: str, vector_matches: list[dict[str, Any]]) -> bool:
-    q = (question or "").lower()
-    if any(pattern in q for pattern in INTERNAL_APP_PATTERNS):
-        return True
-    return False
+def _top_vector_similarity(vector_matches: list[dict[str, Any]]) -> float:
+    top = 0.0
+    for match in vector_matches:
+        try:
+            similarity = float(match.get("similarity", 0.0))
+        except Exception:
+            similarity = 0.0
+        top = max(top, similarity)
+    return top
 
 
-def _looks_like_public_info_question(question: str) -> bool:
-    q = (question or "").lower().strip()
-    if not q:
+def _routing_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(token) >= 3
+    }
+
+
+def _looks_like_orchestration_guidance_chunk(content: str) -> bool:
+    text = (content or "").lower()
+    guidance_signals = (
+        "vector db first",
+        "first source of truth",
+        "orchestration decisions",
+        "orchestration guidance",
+        "tools were used",
+        "responses must show which sources",
+        "query the vector db first",
+        "assistant should use vector db first",
+        "module boundaries",
+        "web search answers",
+    )
+    return any(signal in text for signal in guidance_signals)
+
+
+def _guidance_only_vector_matches(
+    question: str,
+    vector_matches: list[dict[str, Any]],
+    limit: int = 3,
+) -> bool:
+    top_matches = vector_matches[:limit]
+    if not top_matches:
         return False
 
-    if any(pattern in q for pattern in PUBLIC_INFO_PATTERNS):
-        return True
+    question_tokens = _routing_tokens(question)
+    non_guidance_match_count = 0
 
-    if "?" in q and not any(pattern in q for pattern in INTERNAL_APP_PATTERNS):
-        if any(token in q for token in ("kim", "kaç", "hangi", "where", "who", "when", "age", "yaş")):
-            return True
+    for match in top_matches:
+        content = str(match.get("content") or "")
+        if not _looks_like_orchestration_guidance_chunk(content):
+            non_guidance_match_count += 1
+            continue
 
-    return False
+        content_tokens = _routing_tokens(content)
+        overlap = len(question_tokens & content_tokens)
+        if overlap >= 3:
+            non_guidance_match_count += 1
+
+    return non_guidance_match_count == 0
 
 
-# def _needs_dp_db(question: str, vector_matches: list[dict[str, Any]]) -> bool:
-#     q = (question or "").lower()
-#     vector_blob = _relevant_vector_blob(vector_matches)
+def _best_vector_question_overlap(
+    question: str,
+    vector_matches: list[dict[str, Any]],
+    limit: int = 3,
+) -> int:
+    question_tokens = _routing_tokens(question)
+    best_overlap = 0
 
-#     question_needs_db = any(keyword in q for keyword in DP_DB_KEYWORDS)
-#     vector_says_db = any(
-#         phrase in vector_blob
-#         for phrase in (
-#             "requires querying the data processing db",
-#             "query the data processing db",
-#             "internal structured data",
-#             "structured/internal facts",
-#             "audit history",
-#             "hidden metadata",
-#             "processing failures",
-#             "validation results",
-#             "cross-reference",
-#             "cross reference",
-#         )
-#     )
+    for match in vector_matches[:limit]:
+        content_tokens = _routing_tokens(str(match.get("content") or ""))
+        overlap = len(question_tokens & content_tokens)
+        best_overlap = max(best_overlap, overlap)
 
-#     return question_needs_db or vector_says_db
+    return best_overlap
 
-def _needs_dp_db(question: str, vector_matches: list[dict[str, Any]]) -> bool:
-    q = (question or "").lower().strip()
 
-    architecture_patterns = (
-        "how does",
-        "how do",
-        "what is the role",
-        "what is the purpose",
-        "how are",
-        "how is",
-        "workflow",
-        "architecture",
-        "at an architecture level",
-        "interaction between",
-        "interact with",
-        "how formulas",
-        "how validations",
-        "how aggregations",
-    )
-
-    structured_internal_patterns = (
-        "audit",
-        "audit history",
-        "hidden metadata",
-        "metadata",
-        "processing failure",
-        "processing failures",
-        "why did",
-        "failure",
-        "failed",
-        "validation result",
-        "validation results",
-        "cross-reference",
-        "cross reference",
-        "internal status",
-        "processing status",
-        "quarantine",
-        "quarantined",
-        "which job",
-        "which jobs",
-        "which run",
-        "which runs",
-        "which package",
-        "specific run",
-        "specific job",
-        "specific record",
-        "count",
-        "counts",
-        "processed count",
-        "inserted count",
-        "message",
-        "owner",
-        "details",
-    )
-
-    if any(pattern in q for pattern in structured_internal_patterns):
-        return True
-
-    if any(pattern in q for pattern in architecture_patterns):
+def _vector_evidence_is_sufficient(
+    question: str,
+    vector_matches: list[dict[str, Any]],
+    source: str | None = None,
+) -> bool:
+    if not vector_matches:
         return False
 
-    vector_blob = _relevant_vector_blob(vector_matches)
-
-    vector_requests_db = any(
-        phrase in vector_blob
-        for phrase in (
-            "query the data processing db",
-            "structured aggregation run details",
-            "audit history",
-            "execution status",
-            "processed counts",
-            "inserted counts",
-            "run messages",
-            "structured internal records",
-            "internal metadata",
-        )
-    )
-
-    return vector_requests_db
-
-
-
-# def _needs_web(question: str, vector_matches: list[dict[str, Any]]) -> bool:
-#     q = (question or "").lower()
-#     vector_blob = _relevant_vector_blob(vector_matches)
-
-#     question_needs_web = any(keyword in q for keyword in WEB_KEYWORDS)
-#     vector_says_web = any(
-#         phrase in vector_blob
-#         for phrase in (
-#             "requires web search",
-#             "query web search",
-#             "external/current data",
-#             "external or current facts",
-#             "external facts",
-#             "current facts",
-#             "current data",
-#         )
-#     )
-
-#     return question_needs_web or vector_says_web
-
-def _needs_web(question: str, vector_matches: list[dict[str, Any]]) -> bool:
-    q = (question or "").lower()
-    if _vector_requests_web(vector_matches):
+    if source:
         return True
 
-    if _looks_like_public_info_question(q) and not _looks_like_internal_app_question(q, vector_matches):
-        return True
+    if _guidance_only_vector_matches(question, vector_matches):
+        return False
 
-    package_name = _extract_known_package_name(q)
-    package_public_signal = any(
-        phrase in q
-        for phrase in (
-            "npm",
-            "package",
-            "latest version",
-            "version",
-            "advisory",
-            "vulnerability",
-            "security",
-        )
-    )
+    top_similarity = _top_vector_similarity(vector_matches)
+    best_overlap = _best_vector_question_overlap(question, vector_matches)
 
-    if package_name and package_public_signal:
-        return True
+    if top_similarity < ROUTING_MIN_VECTOR_THRESHOLD:
+        return False
 
-    question_needs_web = any(
-        keyword in q
-        for keyword in (
-            "latest",
-            "current",
-            "today",
-            "now",
-            "recent",
-            "release",
-            "cve",
-            "vulnerability",
-            "security advisory",
-            "npmjs",
-            "github",
-            "güncel",
-            "guncel",
-            "son sürüm",
-            "son surum",
-            "bugün",
-            "bugun",
-        )
-    )
+    if best_overlap <= 1:
+        return False
 
-    if not question_needs_web:
+    if top_similarity < ROUTING_STRONG_VECTOR_THRESHOLD and best_overlap <= 2:
         return False
 
     return True
+
+
+def _build_vector_routing_digest(
+    vector_matches: list[dict[str, Any]],
+    limit: int = 3,
+    snippet_chars: int = 220,
+) -> str:
+    if not vector_matches:
+        return "No vector matches."
+
+    lines = []
+    for index, match in enumerate(vector_matches[:limit], start=1):
+        try:
+            similarity = float(match.get("similarity", 0.0))
+        except Exception:
+            similarity = 0.0
+        source = str(match.get("source") or "").strip() or "unknown"
+        content = re.sub(r"\s+", " ", str(match.get("content") or "")).strip()
+        content = content[:snippet_chars]
+        lines.append(
+            f"{index}. similarity={similarity:.3f} | source={source} | snippet={content}"
+        )
+    return "\n".join(lines)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    value = (text or "").strip()
+    if not value:
+        return None
+
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    match = re.search(r"\{.*\}", value, flags=re.DOTALL)
+    if not match:
+        return None
+
+    try:
+        parsed = json.loads(match.group(0))
+    except Exception:
+        return None
+
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _fallback_route_decision(
+    question: str,
+    vector_matches: list[dict[str, Any]],
+    source: str | None = None,
+) -> dict[str, Any]:
+    top_similarity = _top_vector_similarity(vector_matches)
+    guidance_only = _guidance_only_vector_matches(question, vector_matches)
+    evidence_sufficient = _vector_evidence_is_sufficient(question, vector_matches, source=source)
+
+    if (guidance_only or not evidence_sufficient) and not source:
+        return {
+            "route": "web",
+            "confidence": 0.78,
+            "reason": "Top vector matches are not sufficient evidence for an internal answer, so route to web.",
+            "top_similarity": round(top_similarity, 3),
+        }
+
+    if source and top_similarity >= ROUTING_MIN_VECTOR_THRESHOLD:
+        return {
+            "route": "vector_only",
+            "confidence": 0.70,
+            "reason": "LLM router was unavailable; source-filtered vector evidence was sufficient, so falling back to vector_only.",
+            "top_similarity": round(top_similarity, 3),
+        }
+
+    if top_similarity >= ROUTING_STRONG_VECTOR_THRESHOLD:
+        return {
+            "route": "vector_only",
+            "confidence": 0.62,
+            "reason": "LLM router was unavailable; strong vector evidence suggests an internal answer, so falling back to vector_only.",
+            "top_similarity": round(top_similarity, 3),
+        }
+
+    return {
+        "route": "web",
+        "confidence": 0.60,
+        "reason": "Vector retrieval is weak, so the question is treated as external/public and routed to web search.",
+        "top_similarity": round(top_similarity, 3),
+    }
+
+
+def _route_question_with_llm(
+    question: str,
+    vector_matches: list[dict[str, Any]],
+    conversation_context: str | None = None,
+    source: str | None = None,
+) -> dict[str, Any]:
+    history = _trim_conversation_context(conversation_context)
+    top_similarity = _top_vector_similarity(vector_matches)
+    vector_digest = _build_vector_routing_digest(vector_matches)
+    guidance_only = _guidance_only_vector_matches(question, vector_matches)
+    evidence_sufficient = _vector_evidence_is_sufficient(question, vector_matches, source=source)
+
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "You are a routing classifier for a RAG application.\n"
+                "Decide how to answer the user's question.\n"
+                "Available routes:\n"
+                "- vector_only: the question is about the app, ingested documents, or internal architecture/explanations answerable from vector context.\n"
+                "- vector_and_dp_db: the question is about internal structured facts that usually require record lookup in the Data Processing DB, such as runs, jobs, statuses, audit/history, counts, failures, ownership, or metadata.\n"
+                "- web: the question is primarily about public, external, current, or general-world information and should be answered with web search.\n"
+                "Use the question semantics first, then use vector similarity as supporting evidence.\n"
+                "Low or weak vector similarity is evidence that the question may be external.\n"
+                "If vector matches only describe retrieval rules, tool usage, orchestration, or system policy, they are not evidence that the answer is internal.\n"
+                "When the top vector snippets are guidance-only rather than factual evidence for the asked subject, choose web.\n"
+                "If the retrieved snippets do not materially overlap with the user question's subject, choose web.\n"
+                "Choose vector_and_dp_db only when the user is asking for specific internal operational facts that are unlikely to be fully answered by document snippets alone.\n"
+                "Do not rely on fixed keyword matching. Infer intent from meaning.\n"
+                "Return strict JSON only with keys: route, confidence, reason.\n"
+                "route must be one of: vector_only, vector_and_dp_db, web.\n"
+                "confidence must be a number between 0 and 1.\n"
+                "reason must be a short sentence.\n"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Question:\n{question}\n\n"
+                f"Conversation reference:\n{history or 'None'}\n\n"
+                f"Source filter provided: {'yes' if source else 'no'}\n"
+                f"Top vector similarity: {top_similarity:.3f}\n\n"
+                f"Top matches guidance-only: {'yes' if guidance_only else 'no'}\n\n"
+                f"Vector evidence sufficient for internal answer: {'yes' if evidence_sufficient else 'no'}\n\n"
+                f"Top vector matches:\n{vector_digest}"
+            ),
+        },
+    ]
+
+    last_error: Exception | None = None
+    used_model = ""
+
+    for model in _build_model_candidates():
+        used_model = model
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=cast(Any, messages),
+                temperature=0.0,
+            )
+            raw = response.choices[0].message.content or ""
+            parsed = _extract_json_object(raw)
+            if not parsed:
+                continue
+
+            route = str(parsed.get("route") or "").strip()
+            if route not in {"vector_only", "vector_and_dp_db", "web"}:
+                continue
+
+            try:
+                confidence = float(parsed.get("confidence", 0.0))
+            except Exception:
+                confidence = 0.0
+
+            confidence = max(0.0, min(confidence, 1.0))
+            reason = str(parsed.get("reason") or "").strip() or "No reason provided."
+
+            if (guidance_only or not evidence_sufficient) and route != "web" and not source:
+                return {
+                    "route": "web",
+                    "confidence": max(confidence, 0.78),
+                    "reason": "Vector evidence is not sufficient for an internal answer, so the question should be answered via web search.",
+                    "top_similarity": round(top_similarity, 3),
+                    "model_used": used_model,
+                }
+
+            return {
+                "route": route,
+                "confidence": confidence,
+                "reason": reason,
+                "top_similarity": round(top_similarity, 3),
+                "model_used": used_model,
+            }
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "routing_model_failed model=%s error=%s",
+                model,
+                exc,
+            )
+
+    if last_error:
+        logger.info("routing_model_fallback error=%s", last_error)
+
+    fallback = _fallback_route_decision(question, vector_matches, source=source)
+    fallback["model_used"] = "routing_fallback"
+    return fallback
 
 
 def _build_vector_source_names(matches: list[dict[str, Any]]) -> list[str]:
@@ -1001,14 +978,14 @@ def answer_chat(
 ) -> dict[str, Any]:
     total_start = perf_counter()
     tool_trace = []
+    effective_source = _normalize_source_for_chat(source)
     effective_question = _build_effective_question(question, conversation_context)
     conversation_reference = _build_conversation_reference_block(conversation_context)
-    public_web_only = _looks_like_public_info_question(effective_question) and not _looks_like_internal_app_question(effective_question, [])
 
     vector_result = _query_vector_first(
         question=effective_question,
         top_k=top_k,
-        source=source,
+        source=effective_source,
     )
     vector_matches = vector_result["matches"]
 
@@ -1023,8 +1000,43 @@ def answer_chat(
         }
     )
 
-    use_dp_db = False if public_web_only else _needs_dp_db(effective_question, vector_matches)
-    use_web = _needs_web(effective_question, vector_matches)
+    route_decision = _route_question_with_llm(
+        question=effective_question,
+        vector_matches=vector_matches,
+        conversation_context=conversation_context,
+        source=effective_source,
+    )
+    guidance_only_matches = _guidance_only_vector_matches(effective_question, vector_matches)
+    vector_evidence_sufficient = _vector_evidence_is_sufficient(
+        effective_question,
+        vector_matches,
+        source=effective_source,
+    )
+    selected_route = str(route_decision.get("route") or "web")
+    if (guidance_only_matches or not vector_evidence_sufficient) and selected_route != "web" and not effective_source:
+        selected_route = "web"
+        route_decision = {
+            **route_decision,
+            "route": "web",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.78),
+            "reason": "Internal vector evidence is not sufficient, so the question is routed to web search.",
+        }
+    public_web_only = selected_route == "web"
+    use_dp_db = selected_route == "vector_and_dp_db"
+    use_web = selected_route == "web"
+
+    tool_trace.append(
+        {
+            "order": 2,
+            "tool": "llm_router",
+            "used": True,
+            "result": selected_route,
+            "confidence": route_decision.get("confidence"),
+            "top_similarity": route_decision.get("top_similarity"),
+            "model": route_decision.get("model_used"),
+            "reason": route_decision.get("reason"),
+        }
+    )
 
     dp_result = {
         "ok": True,
@@ -1036,19 +1048,9 @@ def answer_chat(
         dp_result = query_internal_data(effective_question)
         dp_context = build_dp_db_context(dp_result)
 
-    # If internal retrieval is weak and the question does not look internal,
-    # fall back to public web search even when the initial keyword heuristic missed it.
-    if not use_web:
-        strong_vector_match = _has_strong_vector_match(vector_matches)
-        has_dp_rows = bool(dp_result.get("rows"))
-        if (not strong_vector_match and not has_dp_rows) and not _looks_like_internal_app_question(effective_question, vector_matches):
-            use_web = True
-
-    public_web_only = use_web and _looks_like_public_info_question(effective_question) and not _looks_like_internal_app_question(effective_question, vector_matches)
-
     tool_trace.append(
         {
-            "order": 2,
+            "order": 3,
             "tool": "data_processing_db",
             "used": use_dp_db,
             "result_count": len(dp_result.get("rows", [])),
@@ -1069,7 +1071,7 @@ def answer_chat(
 
     tool_trace.append(
         {
-            "order": 3,
+            "order": 4,
             "tool": "web_search",
             "used": use_web,
             "result_count": len(web_results),
@@ -1136,6 +1138,7 @@ def answer_chat(
                 "sources_used": sources_used,
                 "vector_queried_first": True,
                 "model_used": "deterministic_package_web_formatter",
+                "routing_decision": route_decision,
                 "tool_trace": tool_trace,
                 "retrieved_chunks": vector_matches,
                 "dp_db_results": dp_result.get("rows", []),
@@ -1156,6 +1159,7 @@ def answer_chat(
         "sources_used": sources_used,
         "vector_queried_first": True,
         "model_used": used_model,
+        "routing_decision": route_decision,
         "tool_trace": tool_trace,
         "retrieved_chunks": vector_matches,
         "dp_db_results": dp_result.get("rows", []),
