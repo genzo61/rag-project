@@ -90,6 +90,7 @@ class OrchestratedChatRequest(BaseModel):
     top_k: int = Field(8, ge=1, le=10)
     source: str | None = Field(None)
     web_top_k: int = Field(5, ge=1, le=20)
+    conversation_context: str | None = Field(None)
 
 class PdfIngestRequest(BaseModel):
     source: str | None = Field(None, description="Kaynak adı, boş bırakılırsa otomatik üretilir")
@@ -168,6 +169,40 @@ def _extract_question_from_messages(messages: list[ChatMessage]) -> str:
         return _message_content_to_text(messages[-1].content)
 
     return ""
+
+
+def _extract_conversation_context(messages: list[ChatMessage], max_turns: int = 6) -> str:
+    if not messages:
+        return ""
+
+    normalized: list[tuple[str, str]] = []
+    latest_user_index = -1
+
+    for message in messages:
+        role = (message.role or "").strip().lower()
+        if role == "system":
+            continue
+
+        text = _message_content_to_text(message.content)
+        if not text:
+            continue
+
+        normalized.append((role, text))
+        if role == "user":
+            latest_user_index = len(normalized) - 1
+
+    if not normalized:
+        return ""
+
+    history_items = normalized[:latest_user_index] if latest_user_index >= 0 else normalized[:-1]
+    history_items = history_items[-max_turns:]
+
+    lines: list[str] = []
+    for role, text in history_items:
+        label = "USER" if role == "user" else "ASSISTANT"
+        lines.append(f"{label}: {text}")
+
+    return "\n".join(lines)
 
 
 def _build_chat_completion_response(
@@ -287,6 +322,7 @@ def chat(payload: OrchestratedChatRequest):
             top_k=payload.top_k,
             source = payload.source,
             web_top_k = payload.web_top_k,
+            conversation_context=payload.conversation_context,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))        
@@ -305,16 +341,17 @@ def chat_completions(payload: ChatCompletionRequest):
         logger.info("chat_completions_request_diag=%s", _safe_json(request_diag))
 
         question = _extract_question_from_messages(payload.messages)
+        conversation_context = _extract_conversation_context(payload.messages)
         if not question:
             raise HTTPException(status_code=400, detail="No user message content found.")
         model_name = payload.model or "local-rag"
-        logger.info("chat_completions_routing mode=web_only")
-        result = ask_question(
+        logger.info("chat_completions_routing mode=orchestrated_chat")
+        result = answer_chat(
             question=question,
             top_k=payload.top_k,
             source=payload.source,
-            use_web=True,
             web_top_k=payload.web_top_k,
+            conversation_context=conversation_context,
         )
 
         answer = result.get("answer", "") or ""
