@@ -1396,6 +1396,14 @@ def answer_chat(
             "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.8),
             "reason": "Current public package version or advisory questions should be answered with web evidence.",
         }
+    elif selected_route == "web" and vector_evidence_sufficient:
+        selected_route = "vector_only"
+        route_decision = {
+            **route_decision,
+            "route": "vector_only",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.75),
+            "reason": "Vector DB evidence is sufficient for this question, so unnecessary web search is disabled.",
+        }
     public_web_only = selected_route == "web"
     use_dp_db = selected_route == "vector_and_dp_db"
     use_web = selected_route == "web"
