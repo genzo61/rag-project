@@ -1452,6 +1452,18 @@ def _build_deterministic_dp_db_answer(
             lines.append(detail)
         return clean_answer("\n".join(lines), source_names)
 
+    if "product" in domain and {"measurement_name", "avg_value", "unit"}.issubset(rows[0]):
+        row = rows[0]
+        if prefers_turkish:
+            answer = f"{row.get('measurement_name')} değerlerinin ortalaması {row.get('avg_value')} {row.get('unit')}."
+            if include_ids and row.get("sample_count") is not None:
+                answer += f" Örnek sayısı: {row.get('sample_count')}."
+        else:
+            answer = f"The average {row.get('measurement_name')} value is {row.get('avg_value')} {row.get('unit')}."
+            if include_ids and row.get("sample_count") is not None:
+                answer += f" Sample count: {row.get('sample_count')}."
+        return clean_answer(answer, source_names)
+
     if "product" in domain and {"asset_label", "measurement_name", "latest_value"}.issubset(rows[0]):
         filtered_rows = rows
         lower_question = (question or "").lower()

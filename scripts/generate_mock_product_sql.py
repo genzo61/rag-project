@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +111,144 @@ def build_create_table_sql(schema: dict[str, Any]) -> str:
     return "\n".join(statements).strip() + "\n"
 
 
+def _format_ts(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_hourly_history(
+    *,
+    start_id: int,
+    register: str,
+    start_at: datetime,
+    hours: int,
+    base_value: float,
+    daily_amplitude: float,
+    weekly_amplitude: float,
+    interval: str = "1h",
+    art: str = "avg",
+    type_name: str = "telemetry",
+    quality: str = "good",
+) -> tuple[list[dict[str, Any]], int]:
+    rows: list[dict[str, Any]] = []
+    current_id = start_id
+
+    for hour_index in range(hours):
+        ze1 = start_at + timedelta(hours=hour_index)
+        ze2 = ze1 + timedelta(hours=1)
+        hour_of_day = ze1.hour
+        weekday = ze1.weekday()
+
+        daily_wave = math.sin((hour_of_day / 24.0) * math.pi * 2.0)
+        weekly_wave = math.cos((weekday / 7.0) * math.pi * 2.0)
+        trend = (hour_index / max(hours, 1)) * 0.8
+        value = base_value + (daily_wave * daily_amplitude) + (weekly_wave * weekly_amplitude) + trend
+
+        rows.append(
+            {
+                "id": current_id,
+                "ze1": _format_ts(ze1),
+                "ze2": _format_ts(ze2),
+                "dataid": register,
+                "value": round(value, 2),
+                "interval": interval,
+                "art": art,
+                "type": type_name,
+                "quality": quality,
+                "created_at": _format_ts(ze2 + timedelta(minutes=1)),
+            }
+        )
+        current_id += 1
+
+    return rows, current_id
+
+
+def _build_daily_history(
+    *,
+    start_id: int,
+    register: str,
+    start_at: datetime,
+    days: int,
+    base_value: float,
+    step_per_day: float,
+    wave_amplitude: float,
+    interval: str = "1d",
+    art: str = "sum",
+    type_name: str = "derived",
+    quality: str = "estimated",
+) -> tuple[list[dict[str, Any]], int]:
+    rows: list[dict[str, Any]] = []
+    current_id = start_id
+
+    for day_index in range(days):
+        ze1 = start_at + timedelta(days=day_index)
+        ze2 = ze1 + timedelta(days=1)
+        wave = math.sin((day_index / 7.0) * math.pi * 2.0)
+        value = base_value + (day_index * step_per_day) + (wave * wave_amplitude)
+
+        rows.append(
+            {
+                "id": current_id,
+                "ze1": _format_ts(ze1),
+                "ze2": _format_ts(ze2),
+                "dataid": register,
+                "value": round(value, 2),
+                "interval": interval,
+                "art": art,
+                "type": type_name,
+                "quality": quality,
+                "created_at": _format_ts(ze2 + timedelta(minutes=5)),
+            }
+        )
+        current_id += 1
+
+    return rows, current_id
+
+
+def _build_s_data_history_rows() -> list[dict[str, Any]]:
+    history_start = datetime(2026, 4, 11, 0, 0, 0)
+    hours = 24 * 30
+    days = 30
+    next_id = 9101
+    rows: list[dict[str, Any]] = []
+
+    hourly_specs = [
+        ("REG_FLOW_DMA_RIVERSIDE", 176.5, 7.5, 2.1),
+        ("REG_PRESS_DMA_RIVERSIDE", 4.65, 0.18, 0.05),
+        ("REG_LEVEL_RES_NORTH", 7.45, 0.22, 0.08),
+        ("REG_FLOW_DMA_HILLTOP", 140.2, 6.0, 1.7),
+        ("REG_PRESS_DMA_HILLTOP", 4.15, 0.16, 0.04),
+    ]
+    for register, base_value, daily_amplitude, weekly_amplitude in hourly_specs:
+        history_rows, next_id = _build_hourly_history(
+            start_id=next_id,
+            register=register,
+            start_at=history_start,
+            hours=hours,
+            base_value=base_value,
+            daily_amplitude=daily_amplitude,
+            weekly_amplitude=weekly_amplitude,
+        )
+        rows.extend(history_rows)
+
+    daily_specs = [
+        ("REG_CONS_DMA_RIVERSIDE", 3410.0, 3.5, 65.0),
+        ("REG_LEAK_DMA_RIVERSIDE", 598.0, 0.9, 18.0),
+    ]
+    for register, base_value, step_per_day, wave_amplitude in daily_specs:
+        history_rows, next_id = _build_daily_history(
+            start_id=next_id,
+            register=register,
+            start_at=history_start,
+            days=days,
+            base_value=base_value,
+            step_per_day=step_per_day,
+            wave_amplitude=wave_amplitude,
+        )
+        rows.extend(history_rows)
+
+    return rows
+
+
 def build_seed_rows() -> dict[str, list[dict[str, Any]]]:
     return {
         "measurementType": [
@@ -212,25 +352,7 @@ def build_seed_rows() -> dict[str, list[dict[str, Any]]]:
             {"dataid": "REG_FLOW_DMA_HILLTOP", "interval": "15m", "type": "telemetry", "ze1": "2026-05-11 08:00:00", "ze2": "2026-05-11 08:15:00", "value": 143.1, "id": 9006, "art": "avg", "quality": "good"},
             {"dataid": "REG_PRESS_DMA_HILLTOP", "interval": "15m", "type": "telemetry", "ze1": "2026-05-11 08:00:00", "ze2": "2026-05-11 08:15:00", "value": 4.3, "id": 9007, "art": "avg", "quality": "good"},
         ],
-        "s_data": [
-            {"id": 9101, "ze1": "2026-05-10 00:00:00", "ze2": "2026-05-10 00:15:00", "dataid": "REG_FLOW_DMA_RIVERSIDE", "value": 176.3, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:16:00"},
-            {"id": 9102, "ze1": "2026-05-10 00:15:00", "ze2": "2026-05-10 00:30:00", "dataid": "REG_FLOW_DMA_RIVERSIDE", "value": 178.9, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:31:00"},
-            {"id": 9103, "ze1": "2026-05-10 00:30:00", "ze2": "2026-05-10 00:45:00", "dataid": "REG_FLOW_DMA_RIVERSIDE", "value": 181.7, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:46:00"},
-            {"id": 9104, "ze1": "2026-05-10 00:00:00", "ze2": "2026-05-10 00:15:00", "dataid": "REG_PRESS_DMA_RIVERSIDE", "value": 4.6, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:16:00"},
-            {"id": 9105, "ze1": "2026-05-10 00:15:00", "ze2": "2026-05-10 00:30:00", "dataid": "REG_PRESS_DMA_RIVERSIDE", "value": 4.7, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:31:00"},
-            {"id": 9106, "ze1": "2026-05-10 00:30:00", "ze2": "2026-05-10 00:45:00", "dataid": "REG_PRESS_DMA_RIVERSIDE", "value": 4.8, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:46:00"},
-            {"id": 9107, "ze1": "2026-05-10 00:00:00", "ze2": "2026-05-10 00:15:00", "dataid": "REG_LEVEL_RES_NORTH", "value": 7.6, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:16:00"},
-            {"id": 9108, "ze1": "2026-05-10 00:15:00", "ze2": "2026-05-10 00:30:00", "dataid": "REG_LEVEL_RES_NORTH", "value": 7.4, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:31:00"},
-            {"id": 9109, "ze1": "2026-05-10 00:30:00", "ze2": "2026-05-10 00:45:00", "dataid": "REG_LEVEL_RES_NORTH", "value": 7.3, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:46:00"},
-            {"id": 9110, "ze1": "2026-05-10 00:00:00", "ze2": "2026-05-10 00:15:00", "dataid": "REG_FLOW_DMA_HILLTOP", "value": 139.8, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:16:00"},
-            {"id": 9111, "ze1": "2026-05-10 00:15:00", "ze2": "2026-05-10 00:30:00", "dataid": "REG_FLOW_DMA_HILLTOP", "value": 141.2, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:31:00"},
-            {"id": 9112, "ze1": "2026-05-10 00:30:00", "ze2": "2026-05-10 00:45:00", "dataid": "REG_FLOW_DMA_HILLTOP", "value": 142.6, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:46:00"},
-            {"id": 9113, "ze1": "2026-05-10 00:00:00", "ze2": "2026-05-11 00:00:00", "dataid": "REG_CONS_DMA_RIVERSIDE", "value": 3520.0, "interval": "1d", "art": "sum", "type": "derived", "quality": "estimated", "created_at": "2026-05-11 00:05:00"},
-            {"id": 9114, "ze1": "2026-05-10 00:00:00", "ze2": "2026-05-11 00:00:00", "dataid": "REG_LEAK_DMA_RIVERSIDE", "value": 621.0, "interval": "1d", "art": "sum", "type": "derived", "quality": "estimated", "created_at": "2026-05-11 00:05:00"},
-            {"id": 9115, "ze1": "2026-05-10 00:00:00", "ze2": "2026-05-10 00:15:00", "dataid": "REG_PRESS_DMA_HILLTOP", "value": 4.1, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:16:00"},
-            {"id": 9116, "ze1": "2026-05-10 00:15:00", "ze2": "2026-05-10 00:30:00", "dataid": "REG_PRESS_DMA_HILLTOP", "value": 4.2, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:31:00"},
-            {"id": 9117, "ze1": "2026-05-10 00:30:00", "ze2": "2026-05-10 00:45:00", "dataid": "REG_PRESS_DMA_HILLTOP", "value": 4.3, "interval": "15m", "art": "avg", "type": "telemetry", "quality": "good", "created_at": "2026-05-10 00:46:00"},
-        ],
+        "s_data": _build_s_data_history_rows(),
     }
 
 

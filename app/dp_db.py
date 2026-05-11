@@ -252,18 +252,101 @@ def _extract_package_name(question: str) -> str | None:
     return None
 
 
+def _normalize_product_metric_text(text: str) -> str:
+    value = (text or "").lower()
+    replacements = str.maketrans(
+        {
+            "ç": "c",
+            "ğ": "g",
+            "ı": "i",
+            "ö": "o",
+            "ş": "s",
+            "ü": "u",
+        }
+    )
+    return value.translate(replacements)
+
+
 def _extract_product_measurement_name(question: str) -> str | None:
-    q = _normalize_internal_domain_typos(question)
-    if any(token in q for token in ("pressure", "basinc", "basınç")):
-        return "pressure"
-    if any(token in q for token in ("flow", "debi")):
-        return "flow"
-    if any(token in q for token in ("level", "seviye")):
-        return "level"
-    if any(token in q for token in ("consumption", "tuketim", "tüketim")):
-        return "consumption"
-    if any(token in q for token in ("leakage", "kacak", "kaçak")):
-        return "leakage"
+    q = _normalize_product_metric_text(_normalize_internal_domain_typos(question))
+    metric_aliases: list[tuple[str, tuple[str, ...]]] = [
+        (
+            "pressure",
+            (
+                "pressure",
+                "basinc",
+                "hat basinci",
+                "su basinci",
+                "sebeke basinci",
+                "hattaki basinc",
+                "bar degeri",
+            ),
+        ),
+        (
+            "flow",
+            (
+                "flow",
+                "debi",
+                "akis",
+                "akis miktari",
+                "su akisi",
+                "su debisi",
+                "debi miktari",
+                "inlet flow",
+            ),
+        ),
+        (
+            "level",
+            (
+                "level",
+                "seviye",
+                "su seviyesi",
+                "depo seviyesi",
+                "rezervuar seviyesi",
+                "tank seviyesi",
+            ),
+        ),
+        (
+            "consumption",
+            (
+                "consumption",
+                "tuketim",
+                "su tuketimi",
+                "kullanim",
+                "faturali tuketim",
+                "tuketim miktari",
+            ),
+        ),
+        (
+            "leakage",
+            (
+                "leakage",
+                "kacak",
+                "su kacagi",
+                "sebeke kacagi",
+                "kayip",
+                "kacak miktari",
+            ),
+        ),
+    ]
+    for canonical_name, aliases in metric_aliases:
+        if any(alias in q for alias in aliases):
+            return canonical_name
+    return None
+
+
+def _extract_product_location_hint(question: str) -> str | None:
+    for keywords in (
+        ("district", "ilce", "ilçe"),
+        ("region", "bolge", "bölge"),
+        ("dma",),
+        ("reservoir", "rezervuar"),
+        ("operation area", "operasyon alani", "operasyon alanı"),
+        ("icin", "için"),
+    ):
+        value = _extract_phrase_before_keywords(question, keywords)
+        if value:
+            return value
     return None
 
 
@@ -357,6 +440,9 @@ def _is_product_question(question: str) -> bool:
         return False
 
     q = _normalize_internal_domain_typos(question)
+    if _extract_product_measurement_name(question):
+        return True
+
     return any(
         token in q
         for token in (
@@ -378,6 +464,7 @@ def _is_product_question(question: str) -> bool:
             "dma",
             "pressure",
             "flow",
+            "level",
             "leakage",
             "consumption",
             "s_data",
@@ -385,6 +472,14 @@ def _is_product_question(question: str) -> bool:
             "basinc",
             "basınç",
             "debi",
+            "akis",
+            "akış",
+            "seviye",
+            "su seviyesi",
+            "su basinci",
+            "su basıncı",
+            "kullanim",
+            "kullanım",
             "ilce",
             "ilçe",
             "bolge",
@@ -395,6 +490,8 @@ def _is_product_question(question: str) -> bool:
             "rezervuar",
             "kacak",
             "kaçak",
+            "kayip",
+            "kayıp",
             "tuketim",
             "tüketim",
         )
@@ -755,8 +852,8 @@ def _query_npm_data(question: str, limit: int = 12) -> dict[str, Any]:
 
 def _query_product_data(question: str, limit: int = 12) -> dict[str, Any]:
     measurement_name = _extract_product_measurement_name(question)
-    district_name = _extract_phrase_before_keywords(question, ("district", "ilce", "ilçe"))
-    region_name = _extract_phrase_before_keywords(question, ("region", "bolge", "bölge"))
+    location_hint = _extract_product_location_hint(question)
+    location_like = f"%{location_hint}%" if location_hint else None
 
     if _question_asks_for_count(question) and _question_has_any(
         question,
@@ -767,17 +864,79 @@ def _query_product_data(question: str, limit: int = 12) -> dict[str, Any]:
         FROM assets a
         LEFT JOIN districtInfo di ON di.id = a.district
         LEFT JOIN region r ON r.id = a.region
-        WHERE (%s IS NULL OR lower(di.name) LIKE lower(%s))
-          AND (%s IS NULL OR lower(r.name) LIKE lower(%s))
+        LEFT JOIN operationArea oa ON oa.opAreaId = a.opAreaId
+        WHERE (
+            %s IS NULL
+            OR lower(coalesce(di.name, '')) LIKE lower(%s)
+            OR lower(coalesce(r.name, '')) LIKE lower(%s)
+            OR lower(coalesce(a.label, '')) LIKE lower(%s)
+            OR lower(coalesce(oa.name, '')) LIKE lower(%s)
+        )
         """
-        district_like = f"%{district_name}%" if district_name else None
-        region_like = f"%{region_name}%" if region_name else None
-        rows = _fetch_rows(sql, (district_name, district_like, region_name, region_like))
+        rows = _fetch_rows(
+            sql,
+            (location_hint, location_like, location_like, location_like, location_like),
+        )
         return {"ok": True, "domain": "product", "query_mode": "template_sql", "rows": rows}
 
     if measurement_name and _question_has_any(
         question,
-        ("latest", "en son", "guncel", "güncel", "current", "son deger", "son değer"),
+        ("ortalama", "average", "avg"),
+    ):
+        sql = """
+        SELECT
+            mt.name AS measurement_name,
+            AVG(sd.value) AS avg_value,
+            dd.unit,
+            COUNT(*) AS sample_count
+        FROM s_data sd
+        JOIN dataDefinition dd ON dd.register = sd.dataid
+        JOIN measurementType mt ON mt.id = dd.measurementTypeId
+        JOIN assets a ON a.id = dd.assetId
+        LEFT JOIN districtInfo di ON di.id = a.district
+        LEFT JOIN region r ON r.id = a.region
+        LEFT JOIN operationArea oa ON oa.opAreaId = a.opAreaId
+        WHERE lower(mt.name) = lower(%s)
+          AND (
+              %s IS NULL
+              OR lower(coalesce(di.name, '')) LIKE lower(%s)
+              OR lower(coalesce(r.name, '')) LIKE lower(%s)
+              OR lower(coalesce(a.label, '')) LIKE lower(%s)
+              OR lower(coalesce(oa.name, '')) LIKE lower(%s)
+          )
+        GROUP BY mt.name, dd.unit
+        ORDER BY sample_count DESC, mt.name
+        LIMIT 1
+        """
+        rows = _fetch_rows(
+            sql,
+            (
+                measurement_name,
+                location_hint,
+                location_like,
+                location_like,
+                location_like,
+                location_like,
+            ),
+        )
+        return {"ok": True, "domain": "product", "query_mode": "template_sql", "rows": rows}
+
+    if measurement_name and _question_has_any(
+        question,
+        (
+            "latest",
+            "en son",
+            "guncel",
+            "güncel",
+            "current",
+            "son deger",
+            "son değer",
+            "degeri nedir",
+            "değeri nedir",
+            "miktari nedir",
+            "miktarı nedir",
+            "nedir",
+        ),
     ):
         sql = """
         SELECT
@@ -794,17 +953,29 @@ def _query_product_data(question: str, limit: int = 12) -> dict[str, Any]:
         JOIN assets a ON a.id = dd.assetId
         LEFT JOIN districtInfo di ON di.id = a.district
         LEFT JOIN region r ON r.id = a.region
+        LEFT JOIN operationArea oa ON oa.opAreaId = a.opAreaId
         WHERE lower(mt.name) = lower(%s)
-          AND (%s IS NULL OR lower(di.name) LIKE lower(%s))
-          AND (%s IS NULL OR lower(r.name) LIKE lower(%s))
+          AND (
+              %s IS NULL
+              OR lower(coalesce(di.name, '')) LIKE lower(%s)
+              OR lower(coalesce(r.name, '')) LIKE lower(%s)
+              OR lower(coalesce(a.label, '')) LIKE lower(%s)
+              OR lower(coalesce(oa.name, '')) LIKE lower(%s)
+          )
         ORDER BY sdc.ze1 DESC NULLS LAST, a.id
         LIMIT %s
         """
-        district_like = f"%{district_name}%" if district_name else None
-        region_like = f"%{region_name}%" if region_name else None
         rows = _fetch_rows(
             sql,
-            (measurement_name, district_name, district_like, region_name, region_like, limit),
+            (
+                measurement_name,
+                location_hint,
+                location_like,
+                location_like,
+                location_like,
+                location_like,
+                limit,
+            ),
         )
         return {"ok": True, "domain": "product", "query_mode": "template_sql", "rows": rows}
 
