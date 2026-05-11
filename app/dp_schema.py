@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from .mock_product_schema import (
+    build_mock_product_rag_documents,
+    build_mock_product_sql_schema_prompt,
+    mock_product_tables,
+)
+
 
 DP_DOMAIN_TABLES: dict[str, list[str]] = {
     "formula": [
@@ -28,6 +34,7 @@ DP_DOMAIN_TABLES: dict[str, list[str]] = {
         "aggregation_result",
         "aggregation_run_audit",
     ],
+    "product": [],
 }
 
 
@@ -218,16 +225,23 @@ DP_SCHEMA_TABLES: dict[str, dict[str, Any]] = {
 
 
 def all_allowed_tables() -> set[str]:
-    return set(DP_SCHEMA_TABLES)
+    return set(DP_SCHEMA_TABLES) | {table_name.lower() for table_name in mock_product_tables()}
 
 
 def domain_tables(domains: Sequence[str] | None = None) -> list[str]:
-    if not domains:
-        return list(DP_SCHEMA_TABLES)
+    if domains is None:
+        return [*list(DP_SCHEMA_TABLES), *[table_name.lower() for table_name in mock_product_tables()]]
 
     seen: set[str] = set()
     ordered: list[str] = []
     for domain in domains:
+        if domain == "product":
+            for table_name in mock_product_tables():
+                normalized_name = table_name.lower()
+                if normalized_name not in seen:
+                    seen.add(normalized_name)
+                    ordered.append(normalized_name)
+            continue
         for table_name in DP_DOMAIN_TABLES.get(domain, []):
             if table_name not in seen:
                 seen.add(table_name)
@@ -237,7 +251,14 @@ def domain_tables(domains: Sequence[str] | None = None) -> list[str]:
 
 def build_sql_schema_prompt(domains: Sequence[str] | None = None) -> str:
     lines: list[str] = []
-    for table_name in domain_tables(domains):
+    include_product = not domains or "product" in domains
+    base_domains = None if domains is None else [domain for domain in domains if domain != "product"]
+    base_table_names = (
+        list(DP_SCHEMA_TABLES)
+        if domains is None
+        else domain_tables(base_domains)
+    )
+    for table_name in base_table_names:
         table = DP_SCHEMA_TABLES[table_name]
         lines.append(f"TABLE {table_name}")
         lines.append(f"DESCRIPTION: {table['description']}")
@@ -245,6 +266,15 @@ def build_sql_schema_prompt(domains: Sequence[str] | None = None) -> str:
         if table.get("joins"):
             lines.append("JOINS: " + " | ".join(table["joins"]))
         lines.append("")
+
+    if include_product:
+        product_prompt = build_mock_product_sql_schema_prompt()
+        if product_prompt:
+            if lines:
+                lines.append(product_prompt)
+            else:
+                return product_prompt
+
     return "\n".join(lines).strip()
 
 
@@ -302,6 +332,7 @@ def build_rag_schema_documents() -> list[str]:
     return [
         *_build_table_catalog_documents(),
         *_build_semantic_guidance_documents(),
+        *build_mock_product_rag_documents(),
         (
             "The Data Processing App formula domain uses the exact PostgreSQL tables "
             f"{formula_tables}. The main joins are formula.id = formula_variable.formula_id, "

@@ -15,6 +15,7 @@ from .db import search_similar
 from .dp_knowledge_seed import SOURCE as DP_KNOWLEDGE_SOURCE
 from .dp_schema import all_allowed_tables, build_sql_schema_prompt, domain_tables
 from .embeddings import get_embedding
+from .mock_product_schema import has_mock_product_schema
 from .rag import PRIMARY_LLM_MODEL, _build_model_candidates, client
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
@@ -167,6 +168,25 @@ def _extract_named_entity_before_keywords(question: str, keywords: Sequence[str]
     return None
 
 
+def _extract_phrase_before_keywords(question: str, keywords: Sequence[str]) -> str | None:
+    q = (question or "").strip()
+
+    quoted = re.search(r"['\"]([^'\"]+)['\"]", q)
+    if quoted:
+        return quoted.group(1).strip()
+
+    for keyword in keywords:
+        pattern = (
+            rf"([a-zA-Z0-9_.-]+(?:\s+[a-zA-Z0-9_.-]+){{0,2}})"
+            rf"\s+{re.escape(keyword)}[a-zA-ZçğıöşüÇĞİÖŞÜ]*"
+        )
+        match = re.search(pattern, q, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+    return None
+
+
 def _extract_contains_name_filter(question: str) -> str | None:
     q = question or ""
     patterns = (
@@ -229,6 +249,21 @@ def _extract_package_name(question: str) -> str | None:
             return "left-pad"
         return value
 
+    return None
+
+
+def _extract_product_measurement_name(question: str) -> str | None:
+    q = _normalize_internal_domain_typos(question)
+    if any(token in q for token in ("pressure", "basinc", "basınç")):
+        return "pressure"
+    if any(token in q for token in ("flow", "debi")):
+        return "flow"
+    if any(token in q for token in ("level", "seviye")):
+        return "level"
+    if any(token in q for token in ("consumption", "tuketim", "tüketim")):
+        return "consumption"
+    if any(token in q for token in ("leakage", "kacak", "kaçak")):
+        return "leakage"
     return None
 
 
@@ -317,6 +352,55 @@ def _is_formula_question(question: str) -> bool:
     )
 
 
+def _is_product_question(question: str) -> bool:
+    if not has_mock_product_schema():
+        return False
+
+    q = _normalize_internal_domain_typos(question)
+    return any(
+        token in q
+        for token in (
+            "asset",
+            "assets",
+            "register",
+            "measurement type",
+            "measurement point",
+            "district",
+            "districtinfo",
+            "region",
+            "operation area",
+            "operationarea",
+            "water balance",
+            "consumer profile",
+            "facility type",
+            "facility",
+            "reservoir",
+            "dma",
+            "pressure",
+            "flow",
+            "leakage",
+            "consumption",
+            "s_data",
+            "s_data_current",
+            "basinc",
+            "basınç",
+            "debi",
+            "ilce",
+            "ilçe",
+            "bolge",
+            "bölge",
+            "operasyon alani",
+            "operasyon alanı",
+            "su dengesi",
+            "rezervuar",
+            "kacak",
+            "kaçak",
+            "tuketim",
+            "tüketim",
+        )
+    )
+
+
 def _detect_sql_domains(question: str) -> list[str]:
     domains: list[str] = []
     if _is_formula_question(question):
@@ -325,6 +409,8 @@ def _detect_sql_domains(question: str) -> list[str]:
         domains.append("validation")
     if _is_aggregation_question(question):
         domains.append("aggregation")
+    if _is_product_question(question):
+        domains.append("product")
     return domains
 
 
@@ -665,6 +751,119 @@ def _query_npm_data(question: str, limit: int = 12) -> dict[str, Any]:
         "query_mode": "template_sql",
         "rows": rows,
     }
+
+
+def _query_product_data(question: str, limit: int = 12) -> dict[str, Any]:
+    measurement_name = _extract_product_measurement_name(question)
+    district_name = _extract_phrase_before_keywords(question, ("district", "ilce", "ilçe"))
+    region_name = _extract_phrase_before_keywords(question, ("region", "bolge", "bölge"))
+
+    if _question_asks_for_count(question) and _question_has_any(
+        question,
+        ("asset", "assets", "facility", "facilities", "tesis"),
+    ):
+        sql = """
+        SELECT COUNT(*) AS asset_count
+        FROM assets a
+        LEFT JOIN districtInfo di ON di.id = a.district
+        LEFT JOIN region r ON r.id = a.region
+        WHERE (%s IS NULL OR lower(di.name) LIKE lower(%s))
+          AND (%s IS NULL OR lower(r.name) LIKE lower(%s))
+        """
+        district_like = f"%{district_name}%" if district_name else None
+        region_like = f"%{region_name}%" if region_name else None
+        rows = _fetch_rows(sql, (district_name, district_like, region_name, region_like))
+        return {"ok": True, "domain": "product", "query_mode": "template_sql", "rows": rows}
+
+    if measurement_name and _question_has_any(
+        question,
+        ("latest", "en son", "guncel", "güncel", "current", "son deger", "son değer"),
+    ):
+        sql = """
+        SELECT
+            a.label AS asset_label,
+            di.name AS district_name,
+            r.name AS region_name,
+            mt.name AS measurement_name,
+            dd.unit,
+            sdc.value AS latest_value,
+            sdc.ze1 AS latest_at
+        FROM s_data_current sdc
+        JOIN dataDefinition dd ON dd.register = sdc.dataid
+        JOIN measurementType mt ON mt.id = dd.measurementTypeId
+        JOIN assets a ON a.id = dd.assetId
+        LEFT JOIN districtInfo di ON di.id = a.district
+        LEFT JOIN region r ON r.id = a.region
+        WHERE lower(mt.name) = lower(%s)
+          AND (%s IS NULL OR lower(di.name) LIKE lower(%s))
+          AND (%s IS NULL OR lower(r.name) LIKE lower(%s))
+        ORDER BY sdc.ze1 DESC NULLS LAST, a.id
+        LIMIT %s
+        """
+        district_like = f"%{district_name}%" if district_name else None
+        region_like = f"%{region_name}%" if region_name else None
+        rows = _fetch_rows(
+            sql,
+            (measurement_name, district_name, district_like, region_name, region_like, limit),
+        )
+        return {"ok": True, "domain": "product", "query_mode": "template_sql", "rows": rows}
+
+    if (
+        _question_has_any(question, ("olmayan", "without", "no active"))
+        and _question_has_any(
+            question,
+            (
+                "datadefinition",
+                "data definition",
+                "active register",
+                "aktif register",
+                "aktif tanim",
+                "aktif tanım",
+            ),
+        )
+    ):
+        sql = """
+        SELECT
+            a.id AS asset_id,
+            a.label AS asset_label,
+            a.type AS asset_type
+        FROM assets a
+        LEFT JOIN dataDefinition dd
+            ON dd.assetId = a.id
+           AND coalesce(dd.isActive, false) = true
+        WHERE dd.id IS NULL
+        ORDER BY a.id
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (limit,))
+        return {"ok": True, "domain": "product", "query_mode": "template_sql", "rows": rows}
+
+    if _question_has_any(
+        question,
+        ("water balance", "su dengesi", "billing input", "bill metered", "system input"),
+    ):
+        sql = """
+        SELECT
+            a.label AS asset_label,
+            wb.interval,
+            dd_in.label AS system_input_label,
+            dd_metered.label AS bill_metered_label,
+            dd_unmetered.label AS bill_unmetered_label,
+            wb.leakageNetwork,
+            wb.leakageReservoir,
+            wb.leakageService
+        FROM waterBalance wb
+        JOIN assets a ON a.id = wb.assetId
+        LEFT JOIN dataDefinition dd_in ON dd_in.id = wb.systemInputId
+        LEFT JOIN dataDefinition dd_metered ON dd_metered.id = wb.billMeteredId
+        LEFT JOIN dataDefinition dd_unmetered ON dd_unmetered.id = wb.billUnmeteredId
+        ORDER BY wb.recordDate DESC NULLS LAST, wb.id DESC
+        LIMIT %s
+        """
+        rows = _fetch_rows(sql, (limit,))
+        return {"ok": True, "domain": "product", "query_mode": "template_sql", "rows": rows}
+
+    return {"ok": False, "domain": "product", "query_mode": "template_sql", "rows": []}
 
 
 def _query_aggregation_data(question: str, limit: int = 12) -> dict[str, Any]:
@@ -1148,6 +1347,11 @@ def query_internal_data(question: str, limit: int = 12) -> dict[str, Any]:
         if _is_npm_question(question):
             return _query_npm_data(question, limit)
 
+        if _is_product_question(question):
+            product_result = _query_product_data(question, limit)
+            if product_result.get("ok"):
+                return product_result
+
         if _prefer_template_query(question):
             if _is_aggregation_question(question):
                 return _query_aggregation_data(question, limit)
@@ -1230,6 +1434,8 @@ def build_dp_db_context(result: dict[str, Any]) -> str:
         label = "VALIDATION"
     elif "aggregation" in domain:
         label = "AGGREGATION"
+    elif "product" in domain:
+        label = "PRODUCT"
     elif "npm" in domain:
         label = "NPM"
 

@@ -496,6 +496,9 @@ def _is_internal_dp_db_candidate(question: str) -> bool:
     if not domains:
         return False
 
+    if "product" in domains:
+        return True
+
     if "aggregation" in domains or "validation" in domains:
         return True
 
@@ -526,6 +529,9 @@ def _should_skip_math_router(question: str) -> bool:
     domains = detect_internal_data_domains(question)
     if not domains:
         return False
+
+    if "product" in domains:
+        return True
 
     if "aggregation" in domains or "validation" in domains:
         return True
@@ -1446,6 +1452,34 @@ def _build_deterministic_dp_db_answer(
             lines.append(detail)
         return clean_answer("\n".join(lines), source_names)
 
+    if "product" in domain and {"asset_label", "measurement_name", "latest_value"}.issubset(rows[0]):
+        filtered_rows = rows
+        lower_question = (question or "").lower()
+        for field in ("district_name", "region_name", "asset_label"):
+            matching_rows = [
+                item
+                for item in rows
+                if item.get(field) and str(item.get(field)).lower().split()[0] in lower_question
+            ]
+            if matching_rows:
+                filtered_rows = matching_rows
+                break
+
+        selected = filtered_rows[0]
+        measurement = selected.get("measurement_name")
+        value = selected.get("latest_value")
+        unit = selected.get("unit")
+        asset_label = selected.get("asset_label")
+        if prefers_turkish:
+            answer = f"En son {measurement} değeri {asset_label} için {value} {unit}."
+            if include_timestamps and selected.get("latest_at"):
+                answer += f" Zaman: {selected.get('latest_at')}."
+        else:
+            answer = f"The latest {measurement} value for {asset_label} is {value} {unit}."
+            if include_timestamps and selected.get("latest_at"):
+                answer += f" Time: {selected.get('latest_at')}."
+        return clean_answer(answer, source_names)
+
     if len(rows) != 1:
         return None
 
@@ -1487,6 +1521,16 @@ def _build_deterministic_dp_db_answer(
                 f"Data Processing DB içinde {row['validation_rule_count']} validation rule var."
                 if prefers_turkish
                 else f"There are {row['validation_rule_count']} validation rules in the Data Processing DB."
+            ),
+            source_names,
+        )
+
+    if "product" in domain and "asset_count" in row:
+        return clean_answer(
+            (
+                f"Data Processing DB iÃ§inde {row['asset_count']} asset var."
+                if prefers_turkish
+                else f"There are {row['asset_count']} assets in the Data Processing DB."
             ),
             source_names,
         )
