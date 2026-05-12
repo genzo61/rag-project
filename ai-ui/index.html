@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div>
+            <h1>AI</h1>
+            <p>Bağımsız sohbetler</p>
+          </div>
+        </div>
+        <div class="sidebarActions">
+          <button id="newChatButton" class="iconButton" type="button" title="Yeni sohbet" aria-label="Yeni sohbet">
+            <span aria-hidden="true">+</span>
+          </button>
+        </div>
+        <div id="sessions" class="sessions"></div>
+      </aside>
+
+      <section class="chat">
+        <header class="chatHeader">
+          <div>
+            <h2 id="chatTitle">Yeni sohbet</h2>
+            <p id="chatMeta">Context bu sohbet içinde tutulur.</p>
+          </div>
+          <div class="headerActions">
+            <button id="backupNowButton" type="button" title="Bu sohbeti 8090'a yedekle">Yedekle</button>
+            <button id="deleteChatButton" type="button">Sil</button>
+          </div>
+        </header>
+
+        <div id="messages" class="messages"></div>
+
+        <form id="chatForm" class="composer">
+          <textarea id="promptInput" rows="2" placeholder="Bir şey yaz..." required></textarea>
+          <button id="sendButton" type="submit">Gonder</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

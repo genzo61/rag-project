@@ -1,0 +1,213 @@
+:root {
+  color-scheme: light;
+  --bg: #0b0f17;
+  --panel: #0f1625;
+  --panel-2: #121c2e;
+  --text: #e7eefc;
+  --muted: rgba(231, 238, 252, 0.7);
+  --border: rgba(231, 238, 252, 0.12);
+  --accent: #7dd3fc;
+  --danger: #f87171;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  background: var(--bg);
+  color: var(--text);
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  min-width: 0;
+}
+
+.brand {
+  padding: 18px 16px 8px 16px;
+}
+.brand h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+.brand p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.sidebarActions {
+  padding: 8px 16px 12px 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.sessions {
+  overflow: auto;
+  padding: 8px 10px 14px 10px;
+}
+
+.sessionButton {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  padding: 10px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+}
+.sessionButton:hover {
+  background: rgba(231, 238, 252, 0.06);
+  border-color: rgba(231, 238, 252, 0.08);
+}
+.sessionButton.active {
+  background: rgba(125, 211, 252, 0.12);
+  border-color: rgba(125, 211, 252, 0.28);
+}
+.sessionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sessionPreview {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-width: 0;
+}
+
+.chatHeader {
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chatHeader h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.chatHeader p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.headerActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+button {
+  border: 1px solid rgba(231, 238, 252, 0.16);
+  background: rgba(231, 238, 252, 0.06);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+button:hover { background: rgba(231, 238, 252, 0.1); }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.iconButton {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+
+.messages {
+  padding: 18px 16px;
+  overflow: auto;
+  background: var(--panel-2);
+}
+
+.message {
+  max-width: 860px;
+  border: 1px solid rgba(231, 238, 252, 0.12);
+  padding: 12px 12px;
+  border-radius: 6px;
+  margin: 0 0 12px 0;
+}
+.message.user {
+  margin-left: auto;
+  background: rgba(125, 211, 252, 0.08);
+  border-color: rgba(125, 211, 252, 0.22);
+}
+.message.assistant {
+  margin-right: auto;
+  background: rgba(231, 238, 252, 0.05);
+}
+.role {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.messageBody {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.composer {
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+}
+
+textarea {
+  resize: none;
+  border: 1px solid rgba(231, 238, 252, 0.16);
+  background: rgba(231, 238, 252, 0.04);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 10px 10px;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.35;
+}
+textarea:focus {
+  border-color: rgba(125, 211, 252, 0.6);
+  box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.12);
+}
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { grid-template-rows: auto auto auto; }
+}
+

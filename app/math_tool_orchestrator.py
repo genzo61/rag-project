@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from openai import OpenAI
 
+from .rag import create_chat_completion
 from .math_tool import (
     normalize_python_math_tool_arguments,
     PYTHON_MATH_TOOL_NAME,
@@ -57,7 +58,7 @@ def run_math_tool_conversation(
     raw_responses: list[dict[str, Any]] = []
 
     for round_index in range(max_rounds):
-        response = client.chat.completions.create(
+        response = create_chat_completion(
             model=model,
             messages=cast(Any, messages),
             tools=[cast(Any, PYTHON_MATH_TOOL_SCHEMA)],

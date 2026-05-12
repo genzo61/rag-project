@@ -1,0 +1,4 @@
+FROM C:\Users\Elife\Desktop\models\gemma-4-E2B-it
+
+PARAMETER temperature 0.2
+PARAMETER num_ctx 4096

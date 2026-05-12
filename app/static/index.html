@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Yerel Asistan</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div>
+            <h1>Yerel Asistan</h1>
+            <p>Sohbet geçmişi</p>
+          </div>
+        </div>
+        <div id="sessions" class="sessions"></div>
+      </aside>
+
+      <section class="chat">
+        <header class="chatHeader">
+          <div>
+            <h2 id="chatTitle">Yeni sohbet</h2>
+            <p id="chatMeta">Mesajlar otomatik yedeklenir.</p>
+          </div>
+          <div class="headerActions">
+            <button id="newChatButton" class="iconButton" type="button" title="Yeni sohbet" aria-label="Yeni sohbet">
+              <span aria-hidden="true">+</span>
+            </button>
+            <button id="deleteChatButton" type="button">Sil</button>
+          </div>
+        </header>
+
+        <div id="messages" class="messages"></div>
+
+        <form id="chatForm" class="composer">
+          <textarea id="promptInput" rows="2" placeholder="Bir şey yaz..." required></textarea>
+          <button id="sendButton" type="submit">Gönder</button>
+        </form>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
