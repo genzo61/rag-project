@@ -1,0 +1,110 @@
+[
+  {
+    "id": "dp_rag_00",
+    "question": "Sistemimde kac tane aggregiation rule var?",
+    "limit": 5,
+    "expected_domains": ["aggregation"],
+    "answerable": true,
+    "required_tables": ["aggregation_rule"],
+    "forbidden_tables": [],
+    "required_sql_fragments": ["count(", "from aggregation_rule"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": []
+  },
+  {
+    "id": "dp_rag_01",
+    "question": "How many formulas exist in the Data Processing DB?",
+    "limit": 5,
+    "expected_domains": ["formula"],
+    "answerable": true,
+    "required_tables": ["formula"],
+    "forbidden_tables": [],
+    "required_sql_fragments": ["count(", "from formula"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["counting formulas", "formula_count"]
+  },
+  {
+    "id": "dp_rag_02",
+    "question": "Which datapoints feed the formula named 'PressureLoss'?",
+    "limit": 10,
+    "expected_domains": ["formula"],
+    "answerable": true,
+    "required_tables": ["formula", "formula_variable"],
+    "forbidden_tables": [],
+    "required_sql_fragments": ["formula_variable", "datapoint_id"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["formula_variable", "datapoint_id", "named formula"]
+  },
+  {
+    "id": "dp_rag_03",
+    "question": "What is the latest persisted snapshot for the formula named 'PressureLoss'?",
+    "limit": 5,
+    "expected_domains": ["formula"],
+    "answerable": true,
+    "required_tables": ["formula", "formula_result_snapshot"],
+    "forbidden_tables": [],
+    "required_sql_fragments": ["formula_result_snapshot", "computed_at", "limit 1"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["latest persisted snapshot", "result_value", "computed_at"]
+  },
+  {
+    "id": "dp_rag_04",
+    "question": "What is the latest aggregation run?",
+    "limit": 5,
+    "expected_domains": ["aggregation"],
+    "answerable": true,
+    "required_tables": ["aggregation_rule", "aggregation_run_audit"],
+    "forbidden_tables": ["aggregation_result"],
+    "required_sql_fragments": ["started_at", "limit 1"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["latest run audit", "aggregation_run_audit", "started_at"]
+  },
+  {
+    "id": "dp_rag_05",
+    "question": "Which aggregation runs failed recently?",
+    "limit": 10,
+    "expected_domains": ["aggregation"],
+    "answerable": true,
+    "required_tables": ["aggregation_rule", "aggregation_run_audit"],
+    "forbidden_tables": ["aggregation_result"],
+    "required_sql_fragments": ["status", "failed"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["failed runs", "aggregation_run_audit", "status"]
+  },
+  {
+    "id": "dp_rag_06",
+    "question": "List 15 minute aggregation rules that use the average method.",
+    "limit": 10,
+    "expected_domains": ["aggregation"],
+    "answerable": true,
+    "required_tables": ["aggregation_rule"],
+    "forbidden_tables": ["aggregation_result", "aggregation_run_audit"],
+    "required_sql_fragments": ["interval_value", "interval_unit", "method", "average"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["interval_value", "interval_unit", "method"]
+  },
+  {
+    "id": "dp_rag_07",
+    "question": "Which validation rules are related to the formula named 'PressureLoss' through shared datapoints?",
+    "limit": 10,
+    "expected_domains": ["formula", "validation"],
+    "answerable": true,
+    "required_tables": ["formula", "formula_variable", "validation_variable", "validation_rule"],
+    "forbidden_tables": [],
+    "required_sql_fragments": ["validation_variable", "validation_rule"],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["shared datapoint ids", "validation_variable", "formula_variable"]
+  },
+  {
+    "id": "dp_rag_08",
+    "question": "Which validation rule is used most often?",
+    "limit": 5,
+    "expected_domains": ["validation"],
+    "answerable": false,
+    "required_tables": [],
+    "forbidden_tables": [],
+    "required_sql_fragments": [],
+    "forbidden_sql_fragments": [],
+    "required_context_terms": ["does not contain that history", "most often", "validation"]
+  }
+]

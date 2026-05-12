@@ -6,7 +6,7 @@ from typing import Any, cast
 
 
 from .db import count_documents
-from .dp_db import build_dp_db_context, query_internal_data
+from .dp_db import build_dp_db_context, detect_internal_data_domains, query_internal_data
 from .rag import (
     PRIMARY_LLM_MODEL,
     _build_model_candidates,
@@ -132,6 +132,114 @@ Examples:
 def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
     lowered = (text or "").lower()
     return any(phrase in lowered for phrase in phrases)
+
+
+def _question_prefers_turkish(question: str) -> bool:
+    raw = question or ""
+    lowered = raw.lower()
+    if any(ch in raw for ch in "çğıİöşüÇĞIÖŞÜ"):
+        return True
+
+    turkish_signals = (
+        " nasıl",
+        " nedir",
+        " hangi",
+        " hangileri",
+        " kaç",
+        " göster",
+        " listele",
+        " var mı",
+        " var mi",
+        " en son",
+        " bugün",
+        " yarın",
+        " saat",
+        " tarih",
+        " için",
+        " kural",
+        " formül",
+        " formul",
+    )
+    return any(token in lowered for token in turkish_signals)
+
+
+def _answer_style_instructions(question: str) -> str:
+    prefers_turkish = _question_prefers_turkish(question)
+    language_line = (
+        "Answer in Turkish because the user's question is in Turkish.\n"
+        if prefers_turkish
+        else "Answer in the same language as the user's question.\n"
+    )
+    return (
+        language_line
+        + "Use natural, user-friendly wording.\n"
+        + "Lead with the direct answer, not the tool or source narration.\n"
+        + "Do not output raw database rows, key=value dumps, or internal field names unless the user explicitly asks for technical detail.\n"
+        + "Do not mention internal ids, rule_id values, formula_id values, or timestamps unless the user explicitly asks for them or they are required to disambiguate the answer.\n"
+        + "If the user asks 'which one' or 'which ones', prefer names and short descriptions over ids and raw metadata.\n"
+        + "When multiple records exist, group or summarize them in readable bullets instead of listing every column.\n"
+        + "Keep the answer concise, clear, and easy to scan.\n"
+    )
+
+
+def _question_requests_ids(question: str) -> bool:
+    q = (question or "").lower()
+    if re.search(r"\b[a-z_]*_id\b", q):
+        return True
+    if re.search(r"\bids?\b", q):
+        return True
+    return any(
+        token in q
+        for token in (
+            "identifier",
+            "identifiers",
+            "kimlik",
+            "kimlikler",
+            "id'si",
+            "idsi",
+            "idleri",
+            "numarasi",
+            "numarası",
+        )
+    )
+
+
+def _question_requests_timestamps(question: str) -> bool:
+    q = (question or "").lower()
+    return any(
+        token in q
+        for token in (
+            "timestamp",
+            "timestamps",
+            "time",
+            "times",
+            "date",
+            "dates",
+            "dated",
+            "when",
+            "started at",
+            "completed at",
+            "created at",
+            "updated at",
+            "computed at",
+            "window start",
+            "window end",
+            "ne zaman",
+            "tarih",
+            "tarihi",
+            "zaman",
+            "saat",
+            "başlangıç",
+            "baslangic",
+            "bitiş",
+            "bitis",
+            "oluşturul",
+            "olusturul",
+            "güncellen",
+            "guncellen",
+            "hesaplan",
+        )
+    )
 
 
 def _explicitly_requests_web(question: str) -> bool:
@@ -380,6 +488,58 @@ def _is_public_current_package_query(question: str) -> bool:
         )
     )
     return asks_current and asks_package and not asks_internal
+
+
+def _is_internal_dp_db_candidate(question: str) -> bool:
+    q = (question or "").lower()
+    domains = detect_internal_data_domains(question)
+    if not domains:
+        return False
+
+    if "product" in domains:
+        return True
+
+    if "aggregation" in domains or "validation" in domains:
+        return True
+
+    if "formula" in domains and not _is_general_math_formula_query(question):
+        formula_internal_hints = (
+            "how many",
+            "count",
+            "latest",
+            "saved",
+            "created",
+            "snapshot",
+            "chart",
+            "datapoint",
+            "variable",
+            "bulk",
+            "stored",
+            "db",
+            "database",
+            "rule",
+            "formula",
+        )
+        return any(token in q for token in formula_internal_hints)
+
+    return False
+
+
+def _should_skip_math_router(question: str) -> bool:
+    domains = detect_internal_data_domains(question)
+    if not domains:
+        return False
+
+    if "product" in domains:
+        return True
+
+    if "aggregation" in domains or "validation" in domains:
+        return True
+
+    if "formula" in domains and not _is_general_math_formula_query(question):
+        return True
+
+    return False
 
 
 def _trim_conversation_context(conversation_context: str | None, max_chars: int = 1200) -> str:
@@ -1050,6 +1210,7 @@ def _call_llm(
     context: str,
     source_names: list[str],
 ) -> tuple[str, str]:
+    style_instructions = _answer_style_instructions(question)
     messages: list[dict[str, str]] = [
         {
             "role": "system",
@@ -1058,6 +1219,8 @@ def _call_llm(
                 "Use only the provided context.\n"
                 "The vector database is always the first source of truth.\n"
                 "If DP DB context exists, use it for structured/internal facts.\n"
+                "If DP DB context contains an exact count, status, timestamp, snapshot, or mapped row value, treat that as the authoritative internal fact.\n"
+                "Do not weaken a precise DP DB result just because Vector DB context is generic guidance.\n"
                 "If web context exists, use it only for external or current facts.\n"
                 "Only mention tools listed under TOOLS_USED.\n"
                 "Do not claim DP DB or web search was used unless it appears in TOOLS_USED.\n"
@@ -1089,6 +1252,7 @@ def _call_llm(
                 "Do not mention Data Processing DB when data_processing_db is not in TOOLS_USED.\n"
                 "Do not use relative publish times like '8 years ago' unless no exact date is present in the context.\n"
                 "If a CONVERSATION REFERENCE block exists, use it only to resolve what the user is referring to.\n"
+                + style_instructions
             ),
         },
         {
@@ -1208,6 +1372,312 @@ def _build_deterministic_package_web_answer(
     return None
 
 
+def _build_deterministic_dp_db_answer(
+    question: str,
+    dp_result: dict[str, Any],
+    source_names: list[str],
+) -> str | None:
+    rows = dp_result.get("rows", [])
+    if not rows:
+        return None
+
+    prefers_turkish = _question_prefers_turkish(question)
+    include_ids = _question_requests_ids(question)
+    include_timestamps = _question_requests_timestamps(question)
+    domain = str(dp_result.get("domain") or "").lower()
+
+    if (
+        "formula" in domain
+        and {"bulk_formula_id", "bulk_formula_name", "group_key", "group_variable_name", "group_datapoint_id"}.issubset(rows[0])
+    ):
+        grouped: dict[tuple[Any, Any, Any, Any, Any], list[str]] = {}
+        for item in rows:
+            key = (
+                item.get("bulk_formula_id"),
+                item.get("bulk_formula_name"),
+                item.get("group_key"),
+                item.get("group_name"),
+                item.get("result_data_id"),
+            )
+            mapping = f"{item.get('group_variable_name')} -> {item.get('group_datapoint_id')}"
+            grouped.setdefault(key, [])
+            if mapping not in grouped[key]:
+                grouped[key].append(mapping)
+
+        lines = ["Bulk formula eşleştirmeleri:"] if prefers_turkish else ["Bulk formula mappings:"]
+        for (bulk_formula_id, bulk_formula_name, group_key, group_name, result_data_id), mappings in grouped.items():
+            label = group_name or group_key or "unknown-group"
+            prefix = f"- {bulk_formula_name}"
+            if include_ids:
+                prefix += f" (id={bulk_formula_id})"
+            if prefers_turkish:
+                detail = f"{prefix}: grup {label}"
+                if result_data_id and include_ids:
+                    detail += f", result_data_id={result_data_id}"
+                detail += f", eşleşmeler: {', '.join(mappings)}"
+            else:
+                detail = f"{prefix}: group={label}"
+                if result_data_id and include_ids:
+                    detail += f", result_data_id={result_data_id}"
+                detail += f", mappings={', '.join(mappings)}"
+            lines.append(detail)
+        return clean_answer("\n".join(lines), source_names)
+
+    if "aggregation" in domain and {"rule_name", "value", "time"}.issubset(rows[0]):
+        lines = ["Son aggregation sonuçları:"] if prefers_turkish else ["Recent aggregation results:"]
+        for item in rows[:10]:
+            parts = [f"- {item.get('rule_name')}: value={item.get('value')}"]
+            if include_timestamps or not prefers_turkish:
+                parts.append(f"time={item.get('time')}")
+            if item.get("interval"):
+                parts.append(f"interval={item.get('interval')}")
+            lines.append(", ".join(parts))
+        return clean_answer("\n".join(lines), source_names)
+
+    if (
+        "aggregation" in domain
+        and {"rule_name", "method", "interval_value", "interval_unit"}.issubset(rows[0])
+    ):
+        question_text = (question or "").lower()
+        if "average" in question_text:
+            lines = ["Average method kullanan aggregation rule'lar:"] if prefers_turkish else ["Aggregation rules that use the average method:"]
+        else:
+            lines = ["Aggregation rule'lar:"] if prefers_turkish else ["Aggregation rules:"]
+        for item in rows[:10]:
+            detail = f"- {item.get('rule_name')}"
+            if prefers_turkish:
+                detail += f" ({item.get('interval_value')} {item.get('interval_unit')}, method={item.get('method')})"
+            else:
+                detail += f" ({item.get('interval_value')} {item.get('interval_unit')}, method={item.get('method')})"
+            lines.append(detail)
+        return clean_answer("\n".join(lines), source_names)
+
+    if "product" in domain and {"measurement_name", "avg_value", "unit"}.issubset(rows[0]):
+        row = rows[0]
+        if prefers_turkish:
+            answer = f"{row.get('measurement_name')} değerlerinin ortalaması {row.get('avg_value')} {row.get('unit')}."
+            if include_ids and row.get("sample_count") is not None:
+                answer += f" Örnek sayısı: {row.get('sample_count')}."
+        else:
+            answer = f"The average {row.get('measurement_name')} value is {row.get('avg_value')} {row.get('unit')}."
+            if include_ids and row.get("sample_count") is not None:
+                answer += f" Sample count: {row.get('sample_count')}."
+        return clean_answer(answer, source_names)
+
+    if "product" in domain and {"asset_label", "measurement_name", "latest_value"}.issubset(rows[0]):
+        filtered_rows = rows
+        lower_question = (question or "").lower()
+        for field in ("district_name", "region_name", "asset_label"):
+            matching_rows = [
+                item
+                for item in rows
+                if item.get(field) and str(item.get(field)).lower().split()[0] in lower_question
+            ]
+            if matching_rows:
+                filtered_rows = matching_rows
+                break
+
+        selected = filtered_rows[0]
+        measurement = selected.get("measurement_name")
+        value = selected.get("latest_value")
+        unit = selected.get("unit")
+        asset_label = selected.get("asset_label")
+        if prefers_turkish:
+            answer = f"En son {measurement} değeri {asset_label} için {value} {unit}."
+            if include_timestamps and selected.get("latest_at"):
+                answer += f" Zaman: {selected.get('latest_at')}."
+        else:
+            answer = f"The latest {measurement} value for {asset_label} is {value} {unit}."
+            if include_timestamps and selected.get("latest_at"):
+                answer += f" Time: {selected.get('latest_at')}."
+        return clean_answer(answer, source_names)
+
+    if len(rows) != 1:
+        return None
+
+    row = rows[0]
+
+    if "formula" in domain and "count" in row:
+        return clean_answer(
+            (
+                f"Data Processing DB içinde {row['count']} formula var."
+                if prefers_turkish
+                else f"There are {row['count']} formulas in the Data Processing DB."
+            ),
+            source_names,
+        )
+
+    if "formula" in domain and "formula_count" in row:
+        return clean_answer(
+            (
+                f"Data Processing DB içinde {row['formula_count']} formula var."
+                if prefers_turkish
+                else f"There are {row['formula_count']} formulas in the Data Processing DB."
+            ),
+            source_names,
+        )
+
+    if "aggregation" in domain and "aggregation_rule_count" in row:
+        return clean_answer(
+            (
+                f"Data Processing DB içinde {row['aggregation_rule_count']} aggregation rule var."
+                if prefers_turkish
+                else f"There are {row['aggregation_rule_count']} aggregation rules in the Data Processing DB."
+            ),
+            source_names,
+        )
+
+    if "validation" in domain and "validation_rule_count" in row:
+        return clean_answer(
+            (
+                f"Data Processing DB içinde {row['validation_rule_count']} validation rule var."
+                if prefers_turkish
+                else f"There are {row['validation_rule_count']} validation rules in the Data Processing DB."
+            ),
+            source_names,
+        )
+
+    if "product" in domain and "asset_count" in row:
+        return clean_answer(
+            (
+                f"Data Processing DB iÃ§inde {row['asset_count']} asset var."
+                if prefers_turkish
+                else f"There are {row['asset_count']} assets in the Data Processing DB."
+            ),
+            source_names,
+        )
+
+    if "aggregation" in domain and {"rule_id", "rule_name", "started_at", "completed_at", "status"}.issubset(row):
+        if prefers_turkish:
+            parts = [f"En son çalışan aggregation run {row['rule_name']} için."]
+            if row.get("status"):
+                parts.append(f"Durum: {row.get('status')}.")
+            if include_timestamps:
+                parts.append(f"Başlangıç: {row.get('started_at')}.")
+                parts.append(f"Bitiş: {row.get('completed_at')}.")
+            if include_ids:
+                parts.append(f"rule_id={row['rule_id']}.")
+            if row.get("message") and (include_timestamps or include_ids):
+                parts.append(f"Mesaj: {row.get('message')}.")
+            return clean_answer(" ".join(parts), source_names)
+
+        parts = [f"The latest aggregation run is for {row['rule_name']}."]
+        if row.get("status"):
+            parts.append(f"Status: {row.get('status')}.")
+        if include_timestamps:
+            parts.append(f"Started at: {row.get('started_at')}.")
+            parts.append(f"Completed at: {row.get('completed_at')}.")
+        if include_ids:
+            parts.append(f"rule_id={row['rule_id']}.")
+        if row.get("message") and (include_timestamps or include_ids):
+            parts.append(f"Message: {row.get('message')}.")
+        return clean_answer(" ".join(parts), source_names)
+
+    return None
+
+
+def _answer_looks_like_sql_leak(answer: str) -> bool:
+    text = (answer or "").strip().lower()
+    if not text:
+        return False
+
+    return any(
+        token in text
+        for token in (
+            "select ",
+            " from ",
+            " join ",
+            " where ",
+            " order by ",
+            " limit ",
+            "```sql",
+            "sql statement",
+            "query pattern",
+            "patterni kullanılabilir",
+            "patterni kullanilabilir",
+        )
+    )
+
+
+def _summarize_dp_row_for_user(row: dict[str, Any], question: str, max_fields: int = 4) -> str:
+    include_ids = _question_requests_ids(question)
+    include_timestamps = _question_requests_timestamps(question)
+    parts: list[str] = []
+
+    preferred_order = (
+        "name",
+        "rule_name",
+        "formula_name",
+        "bulk_formula_name",
+        "group_name",
+        "group_key",
+        "status",
+        "method",
+        "interval_value",
+        "interval_unit",
+        "value",
+        "result_value",
+        "variable_name",
+        "group_variable_name",
+        "datapoint_id",
+        "group_datapoint_id",
+        "message",
+        "note",
+    )
+
+    seen_keys: set[str] = set()
+    ordered_keys = [key for key in preferred_order if key in row]
+    ordered_keys.extend(key for key in row if key not in ordered_keys)
+
+    for key in ordered_keys:
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        value = row.get(key)
+        if value in (None, "", []):
+            continue
+
+        lowered = key.lower()
+        if not include_ids and (lowered == "id" or lowered.endswith("_id")):
+            continue
+        if not include_timestamps and lowered in {"started_at", "completed_at", "created_at", "updated_at", "computed_at", "time"}:
+            continue
+        if lowered == "note":
+            parts.append(str(value))
+            continue
+
+        label = lowered.replace("_", " ")
+        parts.append(f"{label}: {value}")
+        if len(parts) >= max_fields:
+            break
+
+    return "; ".join(parts) if parts else str(row)
+
+
+def _build_generic_dp_db_rows_answer(
+    question: str,
+    dp_result: dict[str, Any],
+    source_names: list[str],
+    max_rows: int = 10,
+) -> str | None:
+    rows = dp_result.get("rows", [])
+    if not rows:
+        return None
+
+    prefers_turkish = _question_prefers_turkish(question)
+    domain = str(dp_result.get("domain") or "data").replace("+", "/")
+    if prefers_turkish:
+        lines = [f"{min(len(rows), max_rows)} adet {domain} kaydı bulundu:"]
+    else:
+        lines = [f"Returned {min(len(rows), max_rows)} {domain} row(s):"]
+
+    for row in rows[:max_rows]:
+        lines.append("- " + _summarize_dp_row_for_user(row, question))
+
+    return clean_answer("\n".join(lines), source_names)
+
+
 def _filter_package_web_results(
     question: str,
     results: list[dict[str, Any]],
@@ -1312,6 +1782,33 @@ def _normalize_answer_tools(answer: str, sources_used: list[str]) -> str:
     return f"{body}\n\n{tools_block}\n\n{sources}".strip()
 
 
+def _build_debug_trace(
+    *,
+    route_decision: dict[str, Any],
+    tool_trace: list[dict[str, Any]],
+    dp_result: dict[str, Any],
+    vector_matches: list[dict[str, Any]],
+    web_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    sql_queries = list(dp_result.get("sql_debug_queries") or [])
+    return {
+        "routing": {
+            "route": route_decision.get("route"),
+            "confidence": route_decision.get("confidence"),
+            "reason": route_decision.get("reason"),
+            "model_used": route_decision.get("model_used"),
+        },
+        "tool_trace": tool_trace,
+        "sql_queries": sql_queries,
+        "summary": {
+            "sql_query_count": len(sql_queries),
+            "vector_match_count": len(vector_matches),
+            "dp_db_row_count": len(dp_result.get("rows", [])),
+            "web_result_count": len(web_results),
+        },
+    }
+
+
 
 def answer_chat(
     question: str,
@@ -1324,7 +1821,18 @@ def answer_chat(
     effective_source = _normalize_source_for_chat(source)
     effective_question = _build_effective_question(question, conversation_context)
     conversation_reference = _build_conversation_reference_block(conversation_context)
-    math_route = _route_question_for_math_tool(effective_question)
+    internal_dp_db_candidate = _is_internal_dp_db_candidate(effective_question)
+    if _should_skip_math_router(effective_question):
+        math_route = {
+            "ok": True,
+            "model_used": "internal_dp_db_guard",
+            "use_math_tool": False,
+            "reason": "Skipped math routing because the question targets internal Data Processing DB records.",
+            "raw_content": "",
+            "fallback_used": False,
+        }
+    else:
+        math_route = _route_question_for_math_tool(effective_question)
     if math_route.get("use_math_tool"):
         return _answer_with_math_tool(question, math_route)
 
@@ -1372,15 +1880,7 @@ def answer_chat(
         source=effective_source,
     )
     selected_route = str(route_decision.get("route") or "web")
-    if (guidance_only_matches or not vector_evidence_sufficient) and selected_route != "web" and not effective_source:
-        selected_route = "web"
-        route_decision = {
-            **route_decision,
-            "route": "web",
-            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.78),
-            "reason": "Internal vector evidence is not sufficient, so the question is routed to web search.",
-        }
-    elif _explicitly_requests_web(question):
+    if _explicitly_requests_web(question):
         selected_route = "web"
         route_decision = {
             **route_decision,
@@ -1395,6 +1895,22 @@ def answer_chat(
             "route": "web",
             "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.8),
             "reason": "Current public package version or advisory questions should be answered with web evidence.",
+        }
+    elif internal_dp_db_candidate:
+        selected_route = "vector_and_dp_db"
+        route_decision = {
+            **route_decision,
+            "route": "vector_and_dp_db",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.9),
+            "reason": "The question targets internal app modules or records, so it should use Vector DB guidance plus read-only Data Processing DB lookup instead of web search.",
+        }
+    elif (guidance_only_matches or not vector_evidence_sufficient) and selected_route != "web" and not effective_source:
+        selected_route = "web"
+        route_decision = {
+            **route_decision,
+            "route": "web",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.78),
+            "reason": "Internal vector evidence is not sufficient, so the question is routed to web search.",
         }
     elif selected_route == "web" and vector_evidence_sufficient:
         selected_route = "vector_only"
@@ -1464,6 +1980,14 @@ def answer_chat(
         }
     )
 
+    debug_trace = _build_debug_trace(
+        route_decision=route_decision,
+        tool_trace=tool_trace,
+        dp_result=dp_result,
+        vector_matches=vector_matches,
+        web_results=web_results,
+    )
+
     if public_web_only:
         sources_used = ["web_search"]
     else:
@@ -1479,9 +2003,16 @@ def answer_chat(
         context_parts.append(conversation_reference)
 
     if not public_web_only:
+        vector_context_text = vector_result.get("context") or "No vector matches."
+        if use_dp_db:
+            vector_context_text = (
+                "This question targets internal Data Processing records. "
+                "Use Data Processing DB rows for exact counts, statuses, timestamps, mappings, and snapshots. "
+                "Use Vector DB only as routing and schema guidance."
+            )
         context_parts.append(
             "VECTOR DB CONTEXT:\n"
-            + (vector_result.get("context") or "No vector matches.")
+            + vector_context_text
         )
 
     if use_dp_db:
@@ -1529,6 +2060,31 @@ def answer_chat(
                 "retrieved_chunks": vector_matches,
                 "dp_db_results": dp_result.get("rows", []),
                 "web_sources": _public_web_results(web_results),
+                "debug_trace": debug_trace,
+                "duration_ms": round((perf_counter() - total_start) * 1000, 1),
+            }
+
+    deterministic_dp_db_answer = None
+    if use_dp_db:
+        deterministic_dp_db_answer = _build_deterministic_dp_db_answer(
+            question=effective_question,
+            dp_result=dp_result,
+            source_names=source_names,
+        )
+        if deterministic_dp_db_answer:
+            answer = _normalize_answer_tools(deterministic_dp_db_answer, sources_used)
+            return {
+                "question": question,
+                "answer": answer,
+                "sources_used": sources_used,
+                "vector_queried_first": True,
+                "model_used": "deterministic_dp_db_formatter",
+                "routing_decision": route_decision,
+                "tool_trace": tool_trace,
+                "retrieved_chunks": vector_matches,
+                "dp_db_results": dp_result.get("rows", []),
+                "web_sources": _public_web_results(web_results),
+                "debug_trace": debug_trace,
                 "duration_ms": round((perf_counter() - total_start) * 1000, 1),
             }
 
@@ -1537,6 +2093,15 @@ def answer_chat(
         context=combined_context,
         source_names=source_names,
     )
+    if use_dp_db and dp_result.get("rows") and _answer_looks_like_sql_leak(answer):
+        fallback_answer = _build_generic_dp_db_rows_answer(
+            question=effective_question,
+            dp_result=dp_result,
+            source_names=source_names,
+        )
+        if fallback_answer:
+            answer = fallback_answer
+            used_model = "deterministic_dp_db_sql_leak_guard"
     answer = _normalize_answer_tools(answer, sources_used)
 
     return {
@@ -1550,5 +2115,6 @@ def answer_chat(
         "retrieved_chunks": vector_matches,
         "dp_db_results": dp_result.get("rows", []),
         "web_sources": _public_web_results(web_results),
+        "debug_trace": debug_trace,
         "duration_ms": round((perf_counter() - total_start) * 1000, 1),
     }

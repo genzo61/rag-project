@@ -1,0 +1,999 @@
+{
+  "schema_name": "mock_npm_llm",
+  "version": "1.0.0",
+  "purpose": "Mock water-utility monitoring schema inspired by NPM backend models. Intended for LLM SQL generation and DB interaction tests.",
+  "source_models": [
+    "src/database/models/assets.js",
+    "src/database/models/assetsproperties.js",
+    "src/database/models/datadefinition.js",
+    "src/database/models/sdata.js",
+    "src/database/models/sdatacurrent.js",
+    "src/database/models/measurementtype.js",
+    "src/database/models/measurementpointtype.js",
+    "src/database/models/facilitytype.js",
+    "src/database/models/operationarea.js",
+    "src/database/models/region.js",
+    "src/database/models/district.js",
+    "src/database/models/districtinfo.js",
+    "src/database/models/datasources.js",
+    "src/database/models/waterbalance.js",
+    "src/database/models/consumerprofile.js"
+  ],
+  "notes": [
+    "This is a simplified schema for testing, not a production mirror.",
+    "Column names intentionally preserve the NPM style where useful, including generic fields like s1, f1, and i1.",
+    "Time-series values are split into an archive table (s_data) and a latest-value table (s_data_current).",
+    "Most operational queries should join assets, dataDefinition, measurementType, districtInfo, and one of the s_data tables."
+  ],
+  "tables": [
+    {
+      "name": "assets",
+      "description": "Core asset registry for monitored facilities, DMA zones, valves, reservoirs, meters, and consumer-linked assets.",
+      "primary_key": [
+        "id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "parentId",
+          "references": "assets.id"
+        },
+        {
+          "column": "measurementPointTypeId",
+          "references": "measurementPointType.id"
+        },
+        {
+          "column": "facilityTypeId",
+          "references": "facilityType.id"
+        },
+        {
+          "column": "opAreaId",
+          "references": "operationArea.opAreaId"
+        },
+        {
+          "column": "region",
+          "references": "region.id"
+        },
+        {
+          "column": "district",
+          "references": "districtInfo.id"
+        },
+        {
+          "column": "dashboardId",
+          "references": "dashboard_like_external.id"
+        },
+        {
+          "column": "i2",
+          "references": "consumer_profile.profileId"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false,
+          "description": "Asset identifier."
+        },
+        {
+          "name": "parentId",
+          "type": "integer",
+          "nullable": true,
+          "description": "Parent asset for hierarchy queries."
+        },
+        {
+          "name": "type",
+          "type": "varchar",
+          "nullable": true,
+          "description": "Logical asset class such as DMA, reservoir, pump, meter, valve."
+        },
+        {
+          "name": "label",
+          "type": "varchar",
+          "nullable": true,
+          "description": "Human-readable asset name."
+        },
+        {
+          "name": "gisId",
+          "type": "varchar",
+          "nullable": true,
+          "description": "External GIS identifier."
+        },
+        {
+          "name": "longitude",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "measurementPointTypeId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "facilityTypeId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "opAreaId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "region",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "district",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "dashboardId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "i1",
+          "type": "integer",
+          "nullable": true,
+          "description": "Reserved integer slot for domain-specific use."
+        },
+        {
+          "name": "i2",
+          "type": "integer",
+          "nullable": true,
+          "description": "Often used as consumer profile link."
+        },
+        {
+          "name": "f1",
+          "type": "double",
+          "nullable": true,
+          "description": "Reserved numeric slot for domain-specific use."
+        },
+        {
+          "name": "s1",
+          "type": "varchar",
+          "nullable": true,
+          "description": "Reserved string slot for domain-specific use."
+        },
+        {
+          "name": "color",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "validFrom",
+          "type": "timestamp",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "assetProperties",
+      "description": "Flexible per-asset property bag for supplemental numeric and date attributes.",
+      "primary_key": [
+        "id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "assetId",
+          "references": "assets.id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "assetId",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "i1",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "i2",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "f1",
+          "type": "float",
+          "nullable": true
+        },
+        {
+          "name": "f2",
+          "type": "float",
+          "nullable": true
+        },
+        {
+          "name": "d1",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "d2",
+          "type": "timestamp",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "dataDefinition",
+      "description": "Defines a measurement register, formula, unit, asset linkage, and metadata used to interpret values in s_data.",
+      "primary_key": [
+        "id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "assetId",
+          "references": "assets.id"
+        },
+        {
+          "column": "measurementTypeId",
+          "references": "measurementType.id"
+        },
+        {
+          "column": "opAreaId",
+          "references": "operationArea.opAreaId"
+        },
+        {
+          "column": "regionId",
+          "references": "region.id"
+        },
+        {
+          "column": "districtId",
+          "references": "districtInfo.id"
+        },
+        {
+          "column": "dataSourceId",
+          "references": "data_sources.id"
+        }
+      ],
+      "unique_keys": [
+        [
+          "register"
+        ]
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "register",
+          "type": "varchar",
+          "nullable": false,
+          "description": "Stable measurement register key used to join with s_data.dataid."
+        },
+        {
+          "name": "label",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "archivePeriod",
+          "type": "varchar",
+          "nullable": false,
+          "description": "Expected data interval such as 15m, 1h, or 1d."
+        },
+        {
+          "name": "isActive",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "measurementTypeId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "assetId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "description",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "unit",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "type": "varchar",
+          "nullable": false,
+          "description": "Domain-specific data type code."
+        },
+        {
+          "name": "formula",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "showCurrentValues",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "opAreaId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "regionId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "districtId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "isPrimary",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "isDefault",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "showInMap",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "availability",
+          "type": "float",
+          "nullable": true
+        },
+        {
+          "name": "automaticCreated",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "dataSourceId",
+          "type": "integer",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "s_data",
+      "description": "Archived measurement values. High-volume time-series table for historical analysis.",
+      "primary_key": [
+        "id",
+        "ze1"
+      ],
+      "foreign_keys": [
+        {
+          "column": "dataid",
+          "references": "dataDefinition.register"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "ze1",
+          "type": "timestamp",
+          "nullable": false,
+          "description": "Start timestamp of the measurement interval."
+        },
+        {
+          "name": "ze2",
+          "type": "timestamp",
+          "nullable": true,
+          "description": "End timestamp of the measurement interval."
+        },
+        {
+          "name": "dataid",
+          "type": "varchar",
+          "nullable": true,
+          "description": "Register key referencing dataDefinition.register."
+        },
+        {
+          "name": "value",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "interval",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "art",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "quality",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "s_data_current",
+      "description": "Latest available value per register and interval. Optimized for dashboard and map views.",
+      "primary_key": [
+        "dataid",
+        "interval",
+        "type"
+      ],
+      "foreign_keys": [
+        {
+          "column": "dataid",
+          "references": "dataDefinition.register"
+        }
+      ],
+      "columns": [
+        {
+          "name": "dataid",
+          "type": "varchar",
+          "nullable": false
+        },
+        {
+          "name": "interval",
+          "type": "varchar",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "type": "varchar",
+          "nullable": false
+        },
+        {
+          "name": "ze1",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "ze2",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "value",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "art",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "quality",
+          "type": "varchar",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "measurementType",
+      "description": "Semantic category of a measurement such as flow, pressure, level, consumption, or leakage.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "deletable",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "showInMnfChart",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "groupId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "hasReverseColors",
+          "type": "boolean",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "measurementPointType",
+      "description": "Lookup table for measurement point or device placement categories.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "facilityType",
+      "description": "Lookup table for high-level facility classes such as reservoir, station, DMA, or chamber.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "operationArea",
+      "description": "Operational service area with demographic and infrastructure metadata.",
+      "primary_key": [
+        "opAreaId"
+      ],
+      "columns": [
+        {
+          "name": "opAreaId",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "area",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "population",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "lengthOfMainNetwork",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "numberOfConsumers",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "validFrom",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "gisId",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "color",
+          "type": "varchar",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "region",
+      "description": "Regional administrative grouping above district level.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "area",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "population",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "validFrom",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "gisId",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "color",
+          "type": "varchar",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "district",
+      "description": "Small lookup table for district identities used in permissions and simple joins.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "districtInfo",
+      "description": "District metadata table with richer geographic and service information than district.",
+      "primary_key": [
+        "id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "region",
+          "references": "region.id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "region",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "area",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "population",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "lengthOfMainNetwork",
+          "type": "double",
+          "nullable": true
+        },
+        {
+          "name": "numberOfConsumers",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "validFrom",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "gisId",
+          "type": "varchar",
+          "nullable": true
+        },
+        {
+          "name": "color",
+          "type": "varchar",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "data_sources",
+      "description": "Connection and ingestion metadata for upstream telemetry systems and import pipelines.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "type": "varchar",
+          "nullable": false,
+          "description": "Source category such as opcua, mqtt, manual_import, or formula."
+        },
+        {
+          "name": "config",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "waterBalance",
+      "description": "Water balance configuration per asset and interval, including links to core system input and billed consumption registers.",
+      "primary_key": [
+        "id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "assetId",
+          "references": "assets.id"
+        },
+        {
+          "column": "systemInputId",
+          "references": "dataDefinition.id"
+        },
+        {
+          "column": "billMeteredId",
+          "references": "dataDefinition.id"
+        },
+        {
+          "column": "billUnmeteredId",
+          "references": "dataDefinition.id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "assetId",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "interval",
+          "type": "varchar",
+          "nullable": false
+        },
+        {
+          "name": "systemInputId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "billMeteredId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "billUnmeteredId",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "unbillMetered",
+          "type": "float",
+          "nullable": false
+        },
+        {
+          "name": "unbillUnmetered",
+          "type": "float",
+          "nullable": false
+        },
+        {
+          "name": "unauthConsumption",
+          "type": "float",
+          "nullable": false
+        },
+        {
+          "name": "customerInacuracy",
+          "type": "float",
+          "nullable": false
+        },
+        {
+          "name": "leakageNetwork",
+          "type": "float",
+          "nullable": false
+        },
+        {
+          "name": "leakageReservoir",
+          "type": "float",
+          "nullable": false
+        },
+        {
+          "name": "leakageService",
+          "type": "float",
+          "nullable": false
+        },
+        {
+          "name": "isDefault",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "recordDate",
+          "type": "timestamp",
+          "nullable": true
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp",
+          "nullable": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "consumer_profile",
+      "description": "Consumer segmentation profile referenced by certain assets for demand and billing analysis.",
+      "primary_key": [
+        "profileId"
+      ],
+      "foreign_keys": [
+        {
+          "column": "asset_id",
+          "references": "assets.id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "profileId",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "type": "varchar",
+          "nullable": false,
+          "description": "Segment type such as residential, commercial, industrial, or template."
+        },
+        {
+          "name": "template_id",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "asset_id",
+          "type": "integer",
+          "nullable": true
+        }
+      ]
+    }
+  ],
+  "relationship_hints": [
+    "assets.id = dataDefinition.assetId",
+    "dataDefinition.register = s_data.dataid",
+    "dataDefinition.register = s_data_current.dataid",
+    "dataDefinition.measurementTypeId = measurementType.id",
+    "assets.measurementPointTypeId = measurementPointType.id",
+    "assets.facilityTypeId = facilityType.id",
+    "assets.opAreaId = operationArea.opAreaId",
+    "assets.region = region.id",
+    "assets.district = districtInfo.id",
+    "districtInfo.region = region.id",
+    "dataDefinition.dataSourceId = data_sources.id",
+    "waterBalance.assetId = assets.id",
+    "waterBalance.systemInputId = dataDefinition.id",
+    "waterBalance.billMeteredId = dataDefinition.id",
+    "waterBalance.billUnmeteredId = dataDefinition.id",
+    "assetProperties.assetId = assets.id",
+    "assets.i2 = consumer_profile.profileId"
+  ],
+  "query_patterns": [
+    "Find the latest pressure value for each asset in a district.",
+    "Aggregate daily flow by region using s_data and dataDefinition.",
+    "List assets that have no active dataDefinition records.",
+    "Join waterBalance to the underlying dataDefinition labels for billing inputs.",
+    "Compare s_data_current values against historical averages in s_data."
+  ]
+}

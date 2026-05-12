@@ -1,14 +1,17 @@
 import logging
 import json
+import os
 import re
 import time
 import uuid
+from collections import OrderedDict
+from html import escape
 from logging.handlers import RotatingFileHandler
 from time import perf_counter
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Any
 
@@ -52,6 +55,9 @@ app = FastAPI(
     version="2.2.0",
     description="PDF tabanlı RAG API (OpenRouter/Ollama + pgvector + FastAPI)",
 )
+
+DEBUG_TRACE_STORE: OrderedDict[str, dict[str, Any]] = OrderedDict()
+DEBUG_TRACE_LIMIT = 100
 
 @app.middleware("http")
 async def log_request_timing(request: Request, call_next):
@@ -210,8 +216,11 @@ def _build_chat_completion_response(
     created_ts: int,
     model: str,
     answer: str,
+    debug_trace_id: str | None = None,
+    debug_trace_url: str | None = None,
+    debug_trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    response = {
         "id": completion_id,
         "object": "chat.completion",
         "created": created_ts,
@@ -232,6 +241,13 @@ def _build_chat_completion_response(
             "total_tokens": 0,
         },
     }
+    if debug_trace_id:
+        response["debug_trace_id"] = debug_trace_id
+    if debug_trace_url:
+        response["debug_trace_url"] = debug_trace_url
+    if debug_trace:
+        response["debug_trace"] = debug_trace
+    return response
 
 
 def _safe_json(value: Any, limit: int = 8000) -> str:
@@ -240,6 +256,128 @@ def _safe_json(value: Any, limit: int = 8000) -> str:
     except Exception:
         text = str(value)
     return text[:limit]
+
+
+def _store_debug_trace(
+    trace: dict[str, Any] | None,
+    request: Request | None = None,
+) -> tuple[str | None, str | None]:
+    if not trace:
+        return None, None
+
+    trace_id = uuid.uuid4().hex
+    DEBUG_TRACE_STORE[trace_id] = trace
+    while len(DEBUG_TRACE_STORE) > DEBUG_TRACE_LIMIT:
+        DEBUG_TRACE_STORE.popitem(last=False)
+    path = f"/debug/traces/{trace_id}"
+    if request is not None:
+        forwarded_proto = (request.headers.get("x-forwarded-proto") or "").strip()
+        forwarded_host = (request.headers.get("x-forwarded-host") or "").strip()
+        forwarded_port = (request.headers.get("x-forwarded-port") or "").strip()
+        host_header = (request.headers.get("host") or "").strip()
+        scheme = forwarded_proto or request.url.scheme or "http"
+        host_value = forwarded_host or host_header
+
+        if host_value and ":" not in host_value and forwarded_port:
+            host_value = f"{host_value}:{forwarded_port}"
+
+        if not host_value:
+            server = request.scope.get("server")
+            if isinstance(server, tuple) and len(server) >= 2:
+                server_host = str(server[0] or "127.0.0.1")
+                server_port = server[1]
+                default_port = 443 if scheme == "https" else 80
+                host_value = (
+                    f"{server_host}:{server_port}"
+                    if server_port and server_port != default_port
+                    else server_host
+                )
+
+        if host_value and ":" not in host_value:
+            server = request.scope.get("server")
+            if isinstance(server, tuple) and len(server) >= 2:
+                server_port = server[1]
+                default_port = 443 if scheme == "https" else 80
+                if server_port and server_port != default_port:
+                    host_value = f"{host_value}:{server_port}"
+
+        if host_value:
+            return trace_id, f"{scheme}://{host_value}{path}"
+
+    explicit_base_url = (os.getenv("DEBUG_TRACE_BASE_URL", "") or os.getenv("PUBLIC_BASE_URL", "")).strip().rstrip("/")
+    if explicit_base_url:
+        return trace_id, f"{explicit_base_url}{path}"
+    return trace_id, path
+
+
+def _render_debug_trace_html(trace_id: str, trace: dict[str, Any]) -> str:
+    summary = trace.get("summary", {})
+    routing = trace.get("routing", {})
+    tool_trace = list(trace.get("tool_trace") or [])
+    sql_queries = list(trace.get("sql_queries") or [])
+
+    sql_sections: list[str] = []
+    for index, query in enumerate(sql_queries, start=1):
+        params = query.get("params") or []
+        params_html = "".join(f"<li><code>{escape(str(item))}</code></li>" for item in params) or "<li><em>none</em></li>"
+        sql_sections.append(
+            "<section class='card'>"
+            f"<h3>SQL #{index}</h3>"
+            f"<p><strong>Mode:</strong> {escape(str(query.get('query_mode') or 'unknown'))}</p>"
+            f"<p><strong>Rows:</strong> {escape(str(query.get('row_count') or 0))}</p>"
+            f"<pre>{escape(str(query.get('sql') or ''))}</pre>"
+            f"<details><summary>Parameters</summary><ul>{params_html}</ul></details>"
+            "</section>"
+        )
+
+    if not sql_sections:
+        sql_sections.append("<section class='card'><h3>SQL</h3><p>No SQL query was executed for this answer.</p></section>")
+
+    tool_sections = "".join(
+        "<li><code>"
+        + escape(json.dumps(item, ensure_ascii=False, default=str))
+        + "</code></li>"
+        for item in tool_trace
+    ) or "<li><em>No tool trace available.</em></li>"
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Debug Trace {escape(trace_id)}</title>
+  <style>
+    body {{ font-family: Segoe UI, Arial, sans-serif; margin: 24px; background: #f5f7fb; color: #1f2937; }}
+    .wrap {{ max-width: 1100px; margin: 0 auto; }}
+    .card {{ background: white; border: 1px solid #dbe3f0; border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 4px 14px rgba(15,23,42,0.05); }}
+    h1, h2, h3 {{ margin-top: 0; }}
+    pre {{ white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e5eefc; padding: 14px; border-radius: 10px; overflow-x: auto; }}
+    code {{ font-family: Consolas, monospace; }}
+    ul {{ padding-left: 20px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Answer Debug Trace</h1>
+      <p><strong>Trace ID:</strong> <code>{escape(trace_id)}</code></p>
+      <div class="grid">
+        <div><strong>Route:</strong> {escape(str(routing.get("route") or "unknown"))}</div>
+        <div><strong>Confidence:</strong> {escape(str(routing.get("confidence") or ""))}</div>
+        <div><strong>SQL Queries:</strong> {escape(str(summary.get("sql_query_count") or 0))}</div>
+        <div><strong>DP DB Rows:</strong> {escape(str(summary.get("dp_db_row_count") or 0))}</div>
+      </div>
+      <p><strong>Reason:</strong> {escape(str(routing.get("reason") or ""))}</p>
+    </div>
+    <div class="card">
+      <h2>Tool Trace</h2>
+      <ul>{tool_sections}</ul>
+    </div>
+    <h2>Executed SQL</h2>
+    {''.join(sql_sections)}
+  </div>
+</body>
+</html>"""
 
 def _build_models_response() -> dict[str, Any]:
     created_ts = int(time.time())
@@ -275,6 +413,14 @@ def root():
             "ingest_pdf": "/ingest-pdf",
         },
     }
+
+
+@app.get("/debug/traces/{trace_id}", response_class=HTMLResponse)
+def get_debug_trace(trace_id: str):
+    trace = DEBUG_TRACE_STORE.get(trace_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail="Debug trace not found.")
+    return HTMLResponse(_render_debug_trace_html(trace_id, trace))
 
 
 @app.get("/health")
@@ -315,20 +461,29 @@ def ask(payload: AskRequest):
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/chat")
-def chat(payload: OrchestratedChatRequest):
+def chat(payload: OrchestratedChatRequest, request: Request):
     try:
-        return answer_chat(
+        result = answer_chat(
             question=payload.question,
             top_k=payload.top_k,
             source = payload.source,
             web_top_k = payload.web_top_k,
             conversation_context=payload.conversation_context,
         )
+        debug_trace_id, debug_trace_url = _store_debug_trace(
+            result.get("debug_trace") if isinstance(result, dict) else None,
+            request=request,
+        )
+        if debug_trace_id:
+            result["debug_trace_id"] = debug_trace_id
+        if debug_trace_url:
+            result["debug_trace_url"] = debug_trace_url
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))        
 
 @app.post("/v1/chat/completions")
-def chat_completions(payload: ChatCompletionRequest):
+def chat_completions(payload: ChatCompletionRequest, request: Request):
     try:
         request_diag = {
             "messages": [msg.model_dump() for msg in payload.messages],
@@ -355,6 +510,11 @@ def chat_completions(payload: ChatCompletionRequest):
         )
 
         answer = result.get("answer", "") or ""
+        debug_trace = result.get("debug_trace") if isinstance(result, dict) else None
+        debug_trace_id, debug_trace_url = _store_debug_trace(
+            debug_trace if isinstance(debug_trace, dict) else None,
+            request=request,
+        )
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created_ts = int(time.time())
 
@@ -393,13 +553,25 @@ def chat_completions(payload: ChatCompletionRequest):
                 yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
-            return StreamingResponse(event_stream(), media_type="text/event-stream")
+            headers = {}
+            if debug_trace_url:
+                headers["X-Debug-Trace-Url"] = debug_trace_url
+            if debug_trace_id:
+                headers["X-Debug-Trace-Id"] = debug_trace_id
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers=headers,
+            )
 
         return _build_chat_completion_response(
             completion_id=completion_id,
             created_ts=created_ts,
             model=model_name,
             answer=answer,
+            debug_trace_id=debug_trace_id,
+            debug_trace_url=debug_trace_url,
+            debug_trace=debug_trace if isinstance(debug_trace, dict) else None,
         )
     except HTTPException:
         raise
