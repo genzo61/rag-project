@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -43,10 +44,70 @@ def vector_to_pgvector_str(vector: list[float]) -> str:
     return "[" + ",".join(f"{float(x):.8f}" for x in vector) + "]"
 
 
-def init_db() -> None:
-    create_table_sql = f"""
-    CREATE EXTENSION IF NOT EXISTS vector;
+def _resolve_runtime_vector_dim() -> int:
+    configured_dim = VECTOR_DIM
 
+    try:
+        from .embeddings import get_embedding
+
+        runtime_dim = len(get_embedding("vector dimension probe"))
+        if configured_dim and configured_dim != runtime_dim:
+            logger.warning(
+                "VECTOR_DIM mismatch configured=%d runtime=%d; runtime dimension will be used for schema checks",
+                configured_dim,
+                runtime_dim,
+            )
+        return runtime_dim
+    except Exception as exc:
+        if configured_dim:
+            logger.warning(
+                "Could not probe runtime embedding dimension; falling back to configured VECTOR_DIM=%d error=%s",
+                configured_dim,
+                exc,
+            )
+            return configured_dim
+        raise RuntimeError(
+            "Unable to determine vector dimension from configuration or embedding backend."
+        ) from exc
+
+
+def _documents_table_exists(conn) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.documents')")
+        row = cur.fetchone()
+        return bool(row and row[0])
+
+
+def _documents_embedding_dim(conn) -> int | None:
+    sql = """
+    SELECT format_type(a.atttypid, a.atttypmod)
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'documents'
+      AND a.attname = 'embedding'
+      AND NOT a.attisdropped;
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return None
+        match = re.search(r"vector\((\d+)\)", str(row[0]))
+        if not match:
+            return None
+        return int(match.group(1))
+
+
+def _documents_row_count(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM documents;")
+        return int(cur.fetchone()[0])
+
+
+def _create_documents_schema(conn, vector_dim: int) -> None:
+    create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS documents (
         id SERIAL PRIMARY KEY,
         source TEXT NOT NULL,
@@ -54,7 +115,7 @@ def init_db() -> None:
         page_end INTEGER,
         chunk_index INTEGER NOT NULL DEFAULT 0,
         content TEXT NOT NULL,
-        embedding vector({VECTOR_DIM}) NOT NULL,
+        embedding vector({vector_dim}) NOT NULL,
         created_at TIMESTAMP DEFAULT NOW(),
         UNIQUE (source, page_start, page_end, chunk_index)
     );
@@ -66,14 +127,84 @@ def init_db() -> None:
     ON documents
     USING hnsw (embedding vector_cosine_ops);
     """
+    with conn.cursor() as cur:
+        cur.execute(create_table_sql)
 
+
+def _ensure_documents_schema(conn, vector_dim: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+
+    if not _documents_table_exists(conn):
+        _create_documents_schema(conn, vector_dim)
+        return
+
+    current_dim = _documents_embedding_dim(conn)
+    if current_dim is None or current_dim == vector_dim:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_documents_source
+                ON documents (source);
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_documents_embedding_hnsw
+                ON documents
+                USING hnsw (embedding vector_cosine_ops);
+                """
+            )
+        return
+
+    row_count = _documents_row_count(conn)
+    if row_count > 0:
+        raise RuntimeError(
+            "documents.embedding dimension mismatch: "
+            f"database={current_dim}, embedding_backend={vector_dim}. "
+            "Clear and re-ingest the vector documents, or align the embedding model and VECTOR_DIM."
+        )
+
+    with conn.cursor() as cur:
+        cur.execute("DROP INDEX IF EXISTS idx_documents_embedding_hnsw;")
+        cur.execute(
+            f"ALTER TABLE documents ALTER COLUMN embedding TYPE vector({vector_dim});"
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_documents_source
+            ON documents (source);
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_documents_embedding_hnsw
+            ON documents
+            USING hnsw (embedding vector_cosine_ops);
+            """
+        )
+
+
+def _validate_embedding_dimension(expected_dim: int, actual_dim: int, operation: str) -> None:
+    if expected_dim != actual_dim:
+        raise RuntimeError(
+            f"{operation} dimension mismatch: database expects {expected_dim}, but embedding/query has {actual_dim}. "
+            "Align VECTOR_DIM and the embedding model, or recreate the vector data with the current embedding model."
+        )
+
+
+def init_db() -> None:
+    vector_dim = _resolve_runtime_vector_dim()
     start = perf_counter()
     with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(create_table_sql)
+        _ensure_documents_schema(conn, vector_dim)
         conn.commit()
 
-    logger.info("init_db completed in %.1f ms", (perf_counter() - start) * 1000)
+    logger.info(
+        "init_db completed vector_dim=%d in %.1f ms",
+        vector_dim,
+        (perf_counter() - start) * 1000,
+    )
 
 
 def insert_document(
@@ -108,8 +239,16 @@ def insert_documents_batch(items: list[dict[str, Any]]) -> None:
     if not items:
         return
 
+    first_embedding = items[0].get("embedding") or []
+    embedding_dim = len(first_embedding)
+    if not embedding_dim:
+        raise ValueError("insert_documents_batch received an empty embedding.")
+
     rows = []
     for item in items:
+        item_embedding = item["embedding"]
+        if len(item_embedding) != embedding_dim:
+            raise ValueError("insert_documents_batch received mixed embedding dimensions.")
         rows.append(
             (
                 normalize_source(item["source"]),
@@ -117,7 +256,7 @@ def insert_documents_batch(items: list[dict[str, Any]]) -> None:
                 item["page_end"],
                 item["chunk_index"],
                 item["content"],
-                vector_to_pgvector_str(item["embedding"]),
+                vector_to_pgvector_str(item_embedding),
             )
         )
 
@@ -132,6 +271,9 @@ def insert_documents_batch(items: list[dict[str, Any]]) -> None:
 
     start = perf_counter()
     with get_connection() as conn:
+        db_dim = _documents_embedding_dim(conn)
+        if db_dim is not None:
+            _validate_embedding_dimension(db_dim, embedding_dim, "insert_documents_batch")
         with conn.cursor() as cur:
             execute_values(
                 cur,
@@ -150,6 +292,7 @@ def insert_documents_batch(items: list[dict[str, Any]]) -> None:
     
 def search_similar(query_embedding: list[float], limit: int = 3, source: str | None = None) -> list[dict[str, Any]]:
     embedding_str = vector_to_pgvector_str(query_embedding)
+    query_dim = len(query_embedding)
 
     if source:
         source = normalize_source(source)
@@ -171,6 +314,9 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
 
     start = perf_counter()
     with get_connection() as conn:
+        db_dim = _documents_embedding_dim(conn)
+        if db_dim is not None:
+            _validate_embedding_dimension(db_dim, query_dim, "search_similar")
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 documents_sql,
@@ -297,6 +443,22 @@ def count_documents() -> int:
             cur.execute(chunk_sql)
             chunk_count = int(cur.fetchone()[0])
             return chunk_count
+
+
+def count_documents_by_source(source: str) -> int:
+    normalized = normalize_source(source)
+
+    sql = """
+    SELECT COUNT(*)
+    FROM documents
+    WHERE lower(source) = lower(%s)
+       OR lower(source) = lower(%s);
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (normalized, normalized + ".pdf"))
+            return int(cur.fetchone()[0])
 
 
 def delete_by_source(source: str) -> int:

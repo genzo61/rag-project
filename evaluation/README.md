@@ -47,3 +47,28 @@ Outputs:
 
 - `reports/math_tool_eval_results.json`
 - `reports/math_tool_eval_report.md`
+
+## DP RAG SQL Evaluation
+
+This repo also includes a database-oriented evaluation for the Data Processing assistant's RAG-backed schema guidance and read-only SQL generation.
+
+Files:
+
+- `dp_rag_test_cases.json`: question set for schema retrieval, SQL generation, safety, and not-answerable behavior
+
+Run from the repo root:
+
+```powershell
+.\venv\Scripts\python.exe scripts/run_dp_rag_eval.py
+```
+
+To also execute validated read-only SQL against the configured Data Processing DB:
+
+```powershell
+.\venv\Scripts\python.exe scripts/run_dp_rag_eval.py --execute-sql
+```
+
+Outputs:
+
+- `reports/dp_rag_eval_results.json`
+- `reports/dp_rag_eval_report.md`

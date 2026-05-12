@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1020" viewBox="0 0 1200 1020">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#333"/>
+    </marker>
+    <style>
+      .title { font: 700 30px Arial, sans-serif; fill: #111; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #444; }
+      .box { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 16; }
+      .decision { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .source { fill: #eef2ff; stroke: #4338ca; stroke-width: 2; rx: 16; }
+      .fallback { fill: #fef2f2; stroke: #b91c1c; stroke-width: 2; rx: 16; }
+      .answer { fill: #ecfdf5; stroke: #047857; stroke-width: 2; rx: 16; }
+      .text { font: 600 18px Arial, sans-serif; fill: #111827; }
+      .small { font: 400 14px Arial, sans-serif; fill: #374151; }
+      .edge { stroke: #333; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .label { font: 700 13px Arial, sans-serif; fill: #111827; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="1020" fill="#f8fafc"/>
+  <text x="600" y="48" text-anchor="middle" class="title">Orchestrator Lifecycle &amp; Routing Architecture</text>
+  <text x="600" y="74" text-anchor="middle" class="subtitle">Vector-first RAG routing with math interception, DP DB routing, and web fallback</text>
+
+  <!-- Boxes -->
+  <rect x="370" y="110" width="460" height="80" class="box" rx="16"/>
+  <text x="600" y="142" text-anchor="middle" class="text">User Query</text>
+  <text x="600" y="166" text-anchor="middle" class="small">Kullanıcı sorusu</text>
+
+  <rect x="330" y="225" width="540" height="90" class="box" rx="16"/>
+  <text x="600" y="258" text-anchor="middle" class="text">Pre-process &amp; Build Effective Question</text>
+  <text x="600" y="283" text-anchor="middle" class="small">Soru + yakın konuşma geçmişi birleştirilir</text>
+
+  <polygon points="600,350 820,430 600,510 380,430" class="decision"/>
+  <text x="600" y="419" text-anchor="middle" class="text">Math Operation?</text>
+  <text x="600" y="444" text-anchor="middle" class="small">Matematiksel işlem mi?</text>
+
+  <rect x="850" y="390" width="270" height="85" class="source" rx="16"/>
+  <text x="985" y="424" text-anchor="middle" class="text">Math Tool</text>
+  <text x="985" y="449" text-anchor="middle" class="small">Standart RAG atlanır</text>
+
+  <rect x="330" y="545" width="540" height="90" class="source" rx="16"/>
+  <text x="600" y="578" text-anchor="middle" class="text">Query Vector DB First</text>
+  <text x="600" y="603" text-anchor="middle" class="small">Her soru için birincil kaynak: internal vector DB</text>
+
+  <polygon points="600,670 840,760 600,850 360,760" class="decision"/>
+  <text x="600" y="730" text-anchor="middle" class="text">Route Decision</text>
+  <text x="600" y="755" text-anchor="middle" class="small">LLM + heuristic thresholds</text>
+  <text x="600" y="779" text-anchor="middle" class="small">strong ≥ 0.32 · min &lt; 0.18 · overlap ≤ 2</text>
+
+  <rect x="70" y="720" width="230" height="95" class="source" rx="16"/>
+  <text x="185" y="754" text-anchor="middle" class="text">Vector Only</text>
+  <text x="185" y="779" text-anchor="middle" class="small">High confidence</text>
+  <text x="185" y="800" text-anchor="middle" class="small">Yüksek güven</text>
+
+  <rect x="905" y="700" width="245" height="95" class="source" rx="16"/>
+  <text x="1028" y="734" text-anchor="middle" class="text">Vector + DP DB</text>
+  <text x="1028" y="759" text-anchor="middle" class="small">Structured/internal data</text>
+  <text x="1028" y="780" text-anchor="middle" class="small">Yapısal iç veri</text>
+
+  <rect x="470" y="895" width="260" height="95" class="fallback" rx="16"/>
+  <text x="600" y="929" text-anchor="middle" class="text">Web Search Fallback</text>
+  <text x="600" y="954" text-anchor="middle" class="small">Low confidence or explicit web</text>
+  <text x="600" y="975" text-anchor="middle" class="small">Zorunlu confidence ≥ 0.78</text>
+
+  <rect x="850" y="890" width="270" height="95" class="answer" rx="16"/>
+  <text x="985" y="924" text-anchor="middle" class="text">Final Answer</text>
+  <text x="985" y="949" text-anchor="middle" class="small">Concise factual response</text>
+  <text x="985" y="970" text-anchor="middle" class="small">Tools/sources cited</text>
+
+  <!-- Edges -->
+  <path d="M600 190 L600 225" class="edge"/>
+  <path d="M600 315 L600 350" class="edge"/>
+  <path d="M820 430 L850 430" class="edge"/>
+  <text x="828" y="416" class="label">yes / evet</text>
+  <path d="M600 510 L600 545" class="edge"/>
+  <text x="615" y="532" class="label">no / hayır</text>
+  <path d="M600 635 L600 670" class="edge"/>
+
+  <path d="M360 760 L300 768" class="edge"/>
+  <text x="278" y="742" class="label">high confidence</text>
+  <path d="M840 760 L905 748" class="edge"/>
+  <text x="842" y="720" class="label">needs DP DB</text>
+  <path d="M600 850 L600 895" class="edge"/>
+  <text x="615" y="878" class="label">low confidence / explicit web</text>
+
+  <path d="M300 768 C420 845, 650 860, 850 930" class="edge"/>
+  <path d="M1028 795 L1000 890" class="edge"/>
+  <path d="M730 943 L850 943" class="edge"/>
+  <path d="M985 475 C1035 610, 1065 760, 985 890" class="edge"/>
+
+  <text x="600" y="1010" text-anchor="middle" class="small">Thresholds: strong vector ≥ 0.32 · minimum vector &lt; 0.18 · token overlap ≤ 2 triggers web fallback</text>
+</svg>
