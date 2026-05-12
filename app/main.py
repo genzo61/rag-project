@@ -11,11 +11,23 @@ from time import perf_counter
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Any
 
-from .dp_knowledge_seed import seed_dp_assistant_knowledge
+from .chat_store import (
+    add_message,
+    create_session,
+    delete_session,
+    ensure_session,
+    get_messages,
+    get_session,
+    init_chat_store,
+    list_sessions,
+    update_session_title,
+)
 from .db import count_documents, delete_by_source, init_db, list_documents, list_sources
 from .rag import ask_question, ingest_pdf, normalize_source
 from .orchestrator import answer_chat
@@ -50,11 +62,25 @@ def configure_logging() -> None:
 configure_logging()
 logger = logging.getLogger("rag.api")
 
+API_MODEL_ID = "local-rag"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
 app = FastAPI(
     title="Local RAG API",
     version="2.2.0",
     description="PDF tabanlı RAG API (OpenRouter/Ollama + pgvector + FastAPI)",
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 DEBUG_TRACE_STORE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 DEBUG_TRACE_LIMIT = 100
@@ -73,6 +99,7 @@ async def log_request_timing(request: Request, call_next):
             duration_ms,
         )
         response.headers["X-Process-Time-Ms"] = f"{duration_ms:.1f}"
+        response.headers["Cache-Control"] = "no-store"
         return response
     except Exception:
         duration_ms = (perf_counter() - start) * 1000
@@ -92,11 +119,41 @@ class AskRequest(BaseModel):
     web_top_k: int = Field(5, ge=1, le=20, description="Web search max sonuç sayısı")
 
 class OrchestratedChatRequest(BaseModel):
-    question: str = Field(..., description="Kullanıcı sorusu")
+    question: str | None = Field(None, description="Kullanıcı sorusu")
+    message: str | None = None
+    prompt: str | None = None
+    input: str | None = None
+    messages: list[Any] | None = None
+    history: Any | None = None
+    session_id: str | None = None
+    sessionId: str | None = None
+    conversation_id: str | None = None
+    conversationId: str | None = None
+    chat_id: str | None = None
+    chatId: str | None = None
     top_k: int = Field(8, ge=1, le=10)
     source: str | None = Field(None)
     web_top_k: int = Field(5, ge=1, le=20)
     conversation_context: str | None = Field(None)
+
+
+class CreateChatSessionRequest(BaseModel):
+    title: str | None = None
+
+
+class UpdateChatSessionRequest(BaseModel):
+    title: str
+
+
+class ChatBackupMessage(BaseModel):
+    role: str
+    content: Any | None = None
+
+
+class ChatBackupRequest(BaseModel):
+    title: str | None = None
+    messages: list[ChatBackupMessage] = Field(default_factory=list)
+
 
 class PdfIngestRequest(BaseModel):
     source: str | None = Field(None, description="Kaynak adı, boş bırakılırsa otomatik üretilir")
@@ -114,7 +171,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = Field("local-rag")
+    model: str = Field(API_MODEL_ID)
     messages: list[ChatMessage]
     stream: bool = Field(False)
     top_k: int = Field(8, ge=1, le=10)
@@ -164,15 +221,85 @@ def _message_content_to_text(content: str | list[dict[str, Any]] | None) -> str:
     return ""
 
 
-def _extract_question_from_messages(messages: list[ChatMessage]) -> str:
+def _message_role(message: Any) -> str:
+    if isinstance(message, ChatMessage):
+        return message.role
+    if isinstance(message, dict):
+        return str(message.get("role") or "")
+    return str(getattr(message, "role", "") or "")
+
+
+def _message_content(message: Any) -> str | list[dict[str, Any]] | None:
+    if isinstance(message, ChatMessage):
+        return message.content
+    if isinstance(message, dict):
+        return message.get("content")
+    return getattr(message, "content", None)
+
+
+def _extract_question_from_messages(messages: list[Any]) -> str:
     for message in reversed(messages):
-        if message.role == "user":
-            text = _message_content_to_text(message.content)
+        if _message_role(message) == "user":
+            text = _message_content_to_text(_message_content(message))
             if text:
                 return text
 
     if messages:
-        return _message_content_to_text(messages[-1].content)
+        return _message_content_to_text(_message_content(messages[-1]))
+
+    return ""
+
+
+def _history_from_messages(messages: list[Any]) -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for message in messages[:-1]:
+        role = _message_role(message)
+        if role not in {"user", "assistant"}:
+            continue
+        text = _message_content_to_text(_message_content(message))
+        if text:
+            history.append({"role": role, "content": text})
+    return history
+
+
+def _history_from_payload_history(history_value: Any) -> list[dict[str, str]]:
+    if not isinstance(history_value, list):
+        return []
+    history: list[dict[str, str]] = []
+    for item in history_value:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = item.get("content") or item.get("message") or item.get("text")
+        if role not in {"user", "assistant"}:
+            continue
+        text = _message_content_to_text(content)
+        if text:
+            history.append({"role": role, "content": text})
+    return history
+
+
+def _extract_session_id(payload: OrchestratedChatRequest) -> str | None:
+    for value in (
+        payload.session_id,
+        payload.sessionId,
+        payload.conversation_id,
+        payload.conversationId,
+        payload.chat_id,
+        payload.chatId,
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _extract_orchestrated_question(payload: OrchestratedChatRequest) -> str:
+    for value in (payload.question, payload.message, payload.prompt, payload.input):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    if payload.messages:
+        return _extract_question_from_messages(payload.messages)
 
     return ""
 
@@ -381,7 +508,7 @@ def _render_debug_trace_html(trace_id: str, trace: dict[str, Any]) -> str:
 
 def _build_models_response() -> dict[str, Any]:
     created_ts = int(time.time())
-    model_ids = ["local-rag"]
+    model_ids = [API_MODEL_ID]
 
     return {
         "object": "list",
@@ -399,20 +526,15 @@ def _build_models_response() -> dict[str, Any]:
 @app.on_event("startup")
 def startup_event():
     init_db()
-    seed_dp_assistant_knowledge()
+    init_chat_store()
 
 
 @app.get("/")
 def root():
-    return {
-        "message": "RAG API ayakta.",
-        "endpoints": {
-            "health": "/health",
-            "list_documents": "/documents",
-            "ask": "/ask",
-            "ingest_pdf": "/ingest-pdf",
-        },
-    }
+    index_path = STATIC_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return {"message": "RAG API ayakta."}
 
 
 @app.get("/debug/traces/{trace_id}", response_class=HTMLResponse)
@@ -463,11 +585,32 @@ def ask(payload: AskRequest):
 @app.post("/chat")
 def chat(payload: OrchestratedChatRequest, request: Request):
     try:
+        question = _extract_orchestrated_question(payload)
+        if not question:
+            raise HTTPException(status_code=400, detail="No user message content found.")
+
+        requested_session_id = _extract_session_id(payload)
+        if requested_session_id:
+            session = ensure_session(requested_session_id)
+            if not session:
+                session = create_session()
+        else:
+            session = create_session()
+
+        session_id = session["id"]
+        stored_history = get_messages(session_id, limit=500)
+        payload_history = _history_from_payload_history(payload.history)
+        if payload.messages:
+            payload_history.extend(_history_from_messages(payload.messages))
+        history = [*stored_history, *payload_history]
+        add_message(session_id, "user", question)
+
         result = answer_chat(
-            question=payload.question,
+            question=question,
             top_k=payload.top_k,
             source = payload.source,
             web_top_k = payload.web_top_k,
+            history=history,
             conversation_context=payload.conversation_context,
         )
         debug_trace_id, debug_trace_url = _store_debug_trace(
@@ -478,9 +621,101 @@ def chat(payload: OrchestratedChatRequest, request: Request):
             result["debug_trace_id"] = debug_trace_id
         if debug_trace_url:
             result["debug_trace_url"] = debug_trace_url
+        add_message(session_id, "assistant", str(result.get("answer") or ""))
+        result["session_id"] = session_id
+        result["session"] = get_session(session_id)
+        result["messages"] = get_messages(session_id, limit=500)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))        
+
+
+@app.post("/chat/sessions")
+def create_chat_session(payload: CreateChatSessionRequest | None = None):
+    try:
+        title = payload.title if payload else ""
+        return create_session(title or None)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/chat/sessions")
+def get_chat_sessions(limit: int = 100):
+    try:
+        return {"items": list_sessions(limit=limit)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/chat/sessions/{session_id}")
+def get_chat_session(session_id: str):
+    try:
+        session = get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Sohbet bulunamadı.")
+        return {
+            "session": session,
+            "messages": get_messages(session_id, limit=500),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/chat/sessions/{session_id}")
+def patch_chat_session(session_id: str, payload: UpdateChatSessionRequest):
+    try:
+        session = update_session_title(session_id, payload.title)
+        if not session:
+            raise HTTPException(status_code=404, detail="Sohbet bulunamadı.")
+        return session
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/chat/sessions/{session_id}")
+def remove_chat_session(session_id: str):
+    try:
+        deleted = delete_session(session_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Sohbet bulunamadı.")
+        return {"deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/backup")
+def backup_chat(payload: ChatBackupRequest):
+    try:
+        title = (payload.title or "").strip() or None
+        session = create_session(title)
+        session_id = session["id"]
+
+        for message in payload.messages:
+            role = (message.role or "").strip() or "user"
+            content = message.content
+            if content is None:
+                text = ""
+            elif isinstance(content, str):
+                text = content
+            else:
+                text = json.dumps(content, ensure_ascii=False)
+            add_message(session_id, role, text)
+
+        return {
+            "session_id": session_id,
+            "session": get_session(session_id),
+            "message_count": len(payload.messages),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/chat/completions")
 def chat_completions(payload: ChatCompletionRequest, request: Request):
@@ -499,13 +734,21 @@ def chat_completions(payload: ChatCompletionRequest, request: Request):
         conversation_context = _extract_conversation_context(payload.messages)
         if not question:
             raise HTTPException(status_code=400, detail="No user message content found.")
-        model_name = payload.model or "local-rag"
-        logger.info("chat_completions_routing mode=orchestrated_chat")
+        requested_model = payload.model or API_MODEL_ID
+        model_name = API_MODEL_ID
+        if requested_model != API_MODEL_ID:
+            logger.info(
+                "chat_completions_model_alias requested=%s served_as=%s",
+                requested_model,
+                model_name,
+            )
+        logger.info("chat_completions_routing mode=orchestrated")
         result = answer_chat(
             question=question,
             top_k=payload.top_k,
             source=payload.source,
             web_top_k=payload.web_top_k,
+            history=_history_from_messages(payload.messages),
             conversation_context=conversation_context,
         )
 

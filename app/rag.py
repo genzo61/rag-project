@@ -5,6 +5,8 @@ from typing import Any
 import logging
 from time import perf_counter
 from urllib.parse import urlparse
+from types import SimpleNamespace
+import json
 
 import requests
 from dotenv import load_dotenv
@@ -54,6 +56,65 @@ client = OpenAI(
     base_url=LLM_BASE_URL,
     api_key=LLM_API_KEY,
 )
+
+
+def create_chat_completion(**kwargs: Any) -> Any:
+    if LLM_BACKEND == "ollama":
+        model = kwargs["model"]
+        messages = kwargs.get("messages", [])
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+        }
+
+        tools = kwargs.get("tools")
+        if tools:
+            payload["tools"] = tools
+
+        options: dict[str, Any] = {}
+        if "temperature" in kwargs:
+            options["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            options["num_predict"] = kwargs["max_tokens"]
+        if options:
+            payload["options"] = options
+
+        response = requests.post(
+            f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+            json=payload,
+            timeout=300,
+        )
+        response.raise_for_status()
+        data = response.json()
+        message_data = data.get("message", {}) or {}
+
+        tool_calls = []
+        for index, tool_call in enumerate(message_data.get("tool_calls", []) or []):
+            function_data = tool_call.get("function", {}) or {}
+            arguments = function_data.get("arguments", {})
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments, ensure_ascii=False)
+            tool_calls.append(
+                SimpleNamespace(
+                    id=tool_call.get("id") or f"tool-call-{index}",
+                    function=SimpleNamespace(
+                        name=function_data.get("name") or "",
+                        arguments=arguments,
+                    ),
+                )
+            )
+
+        message = SimpleNamespace(
+            role=message_data.get("role", "assistant"),
+            content=message_data.get("content", "") or "",
+            tool_calls=tool_calls,
+        )
+        choice = SimpleNamespace(message=message)
+        return SimpleNamespace(choices=[choice])
+
+    return client.chat.completions.create(**kwargs)
 
 
 def _build_model_candidates() -> list[str]:
@@ -1111,7 +1172,7 @@ def ask_question(
         for candidate in _build_model_candidates():
             used_model = candidate
             try:
-                response = client.chat.completions.create(
+                response = create_chat_completion(
                     model=candidate,
                     messages=messages,
                     temperature=0.0,
@@ -1159,7 +1220,7 @@ def ask_question(
                     ),
                 },
             ]
-            response_retry = client.chat.completions.create(
+            response_retry = create_chat_completion(
                 model=used_model,
                 messages=retry_messages,
                 temperature=0.0,

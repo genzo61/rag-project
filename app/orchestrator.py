@@ -15,13 +15,38 @@ from .rag import (
     build_web_context,
     clean_answer,
     client,
+    create_chat_completion,
     retrieve_context,
     web_search,
 )
+from .math_tool import run_python_math_tool
 from .math_tool_orchestrator import run_math_tool_conversation
 
 logger = logging.getLogger("rag.orchestrator")
 
+PUBLIC_MODEL_ID = "local-rag"
+
+DP_DB_KEYWORDS = (
+    "audit",
+    "history",
+    "hidden",
+    "metadata",
+    "processing failure",
+    "failure",
+    "validation",
+    "cross-reference",
+    "cross reference",
+    "internal",
+    "join",
+    "owner",
+    "status",
+    "npm package",
+    "package",
+    "audit history",
+    "hidden metadata",
+    "processing failures",
+    "validation results",
+)
 ROUTING_STRONG_VECTOR_THRESHOLD = 0.32
 ROUTING_MIN_VECTOR_THRESHOLD = 0.18
 ROUTING_GUIDANCE_SOURCE = "dp-assistant-demo"
@@ -88,6 +113,28 @@ GENERAL_MATH_FORMULA_TERMS = (
     "weighted mean",
     "median formula",
     "mode formula",
+    "formula",
+    "formül",
+    "formul",
+    "equation",
+    "denklem",
+    "area",
+    "alan",
+    "perimeter",
+    "çevre",
+    "cevre",
+    "circle",
+    "daire",
+    "triangle",
+    "üçgen",
+    "ucgen",
+    "rectangle",
+    "dikdörtgen",
+    "dikdortgen",
+    "derivative",
+    "türev",
+    "turev",
+    "integral",
 )
 
 GENERAL_MATH_TASK_TERMS = (
@@ -108,6 +155,37 @@ GENERAL_MATH_TASK_TERMS = (
     "plus",
     "minus",
     "total",
+    "hesapla",
+    "çöz",
+    "coz",
+    "topla",
+    "çıkar",
+    "cikar",
+    "böl",
+    "bol",
+    "çarp",
+    "carp",
+    "ortalama",
+    "aritmetik ortalama",
+    "medyan",
+    "yüzde",
+    "yuzde",
+    "oran",
+    "fark",
+    "toplam",
+)
+
+MATH_EXCLUSION_TERMS = (
+    "package",
+    "npm",
+    "cve",
+    "github",
+    "validation result",
+    "audit history",
+    "processing job",
+    "water main",
+    "crli",
+    "ili",
 )
 
 MATH_ROUTER_SYSTEM_PROMPT = """You are a routing model inside an orchestrator.
@@ -249,7 +327,25 @@ def _explicitly_requests_web(question: str) -> bool:
 def _is_general_math_formula_query(question: str) -> bool:
     q = (question or "").lower()
     asks_math_term = any(term in q for term in GENERAL_MATH_FORMULA_TERMS)
-    asks_how = any(token in q for token in ("how", "nedir", "nasil", "nasıl", "formula", "calculate", "find"))
+    asks_how = any(
+        token in q
+        for token in (
+            "how",
+            "what",
+            "nedir",
+            "nasıl",
+            "nasil",
+            "formula",
+            "formül",
+            "formul",
+            "calculate",
+            "find",
+            "hesapla",
+            "bul",
+            "çöz",
+            "coz",
+        )
+    )
     asks_internal = any(
         token in q
         for token in (
@@ -277,27 +373,28 @@ def _is_math_tool_candidate(question: str) -> bool:
     if _extract_known_package_name(question):
         return False
 
-    if any(
-        token in q
-        for token in (
-            "cve",
-            "github",
-            "validation result",
-            "audit history",
-            "processing job",
-            "water main",
-            "crli",
-            "ili",
-        )
-    ):
+    if any(token in q for token in MATH_EXCLUSION_TERMS):
         return False
 
     if _is_general_math_formula_query(question):
         return True
 
-    has_math_symbols = bool(re.search(r"\d", q) and re.search(r"[\+\-\*/%=()]", q))
+    has_math_symbols = bool(
+        re.search(r"\d", q)
+        and re.search(r"[\+\-\*/%=()^×÷]", q)
+    )
+    has_equation_shape = bool(re.search(r"\b[a-z]\s*=", q) or re.search(r"\d\s*[a-z]\b", q))
+    has_percent_problem = bool(re.search(r"\d+(?:[.,]\d+)?\s*%", q))
+    has_multiple_numbers = len(re.findall(r"-?\d+(?:[.,]\d+)?", q)) >= 2
     has_math_language = any(term in q for term in GENERAL_MATH_TASK_TERMS)
-    return has_math_symbols or has_math_language
+    has_percent_language = any(term in q for term in ("percent", "percentage", "yüzde", "yuzde"))
+    return (
+        has_math_symbols
+        or has_equation_shape
+        or has_percent_problem
+        or (has_percent_language and has_multiple_numbers)
+        or (has_math_language and has_multiple_numbers)
+    )
 
 
 def _parse_router_json(text: str) -> dict[str, Any] | None:
@@ -322,7 +419,7 @@ def _route_question_for_math_tool(question: str) -> dict[str, Any]:
 
     for model_name in _build_model_candidates():
         try:
-            response = client.chat.completions.create(
+            response = create_chat_completion(
                 model=model_name,
                 messages=cast(
                     Any,
@@ -373,7 +470,142 @@ def _route_question_for_math_tool(question: str) -> dict[str, Any]:
     }
 
 
+def _numbers_from_question(question: str) -> list[float]:
+    numbers = []
+    for raw in re.findall(r"-?\d+(?:[.,]\d+)?", question or ""):
+        try:
+            numbers.append(float(raw.replace(",", ".")))
+        except ValueError:
+            continue
+    return numbers
+
+
+def _extract_arithmetic_expression(question: str) -> str | None:
+    normalized = (
+        (question or "")
+        .replace("×", "*")
+        .replace("÷", "/")
+        .replace("^", "**")
+    )
+    candidates = re.findall(r"[-+*/().\d\s*]+", normalized)
+    candidates = [
+        re.sub(r"\s+", "", candidate)
+        for candidate in candidates
+        if re.search(r"\d", candidate) and re.search(r"[+\-*/]", candidate)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=len).strip()
+
+
+def _direct_math_tool_result(question: str) -> dict[str, Any] | None:
+    q = (question or "").lower()
+
+    expression = _extract_arithmetic_expression(question)
+    if expression:
+        result = run_python_math_tool(
+            {
+                "mode": "expression",
+                "expression": expression,
+            }
+        )
+        if result.get("ok"):
+            return {
+                "answer": str(result.get("formatted_result") or result.get("result")),
+                "tool_event": {
+                    "tool_name": "python_math_tool",
+                    "normalized_arguments": {
+                        "mode": "expression",
+                        "expression": expression,
+                    },
+                    "tool_result": result,
+                    "fallback": "direct_expression",
+                },
+            }
+
+    numbers = _numbers_from_question(question)
+    operation = None
+    arguments: dict[str, Any] = {"mode": "structured"}
+
+    if any(term in q for term in ("average", "mean", "ortalama", "aritmetik ortalama")) and numbers:
+        operation = "mean"
+        arguments["numbers"] = numbers
+    elif any(term in q for term in ("median", "medyan")) and numbers:
+        operation = "median"
+        arguments["numbers"] = numbers
+    elif any(term in q for term in ("sum", "total", "toplam", "topla")) and numbers:
+        operation = "sum"
+        arguments["numbers"] = numbers
+    elif re.search(r"\d+(?:[.,]\d+)?\s*%\s*(?:of|of the|si|sı|i|ı)?", q) and len(numbers) >= 2:
+        operation = "percentage_of"
+        arguments["percent"] = numbers[0]
+        arguments["value"] = numbers[1]
+    elif any(term in q for term in ("percent of", "percentage of")) and len(numbers) >= 2:
+        operation = "percentage_of"
+        arguments["percent"] = numbers[0]
+        arguments["value"] = numbers[1]
+    elif any(term in q for term in ("yüzde", "yuzde")) and len(numbers) >= 2:
+        operation = "percentage_of"
+        arguments["value"] = numbers[0]
+        arguments["percent"] = numbers[1]
+    elif any(term in q for term in ("percentage change", "yüzde değişim", "yuzde degisim")) and len(numbers) >= 2:
+        operation = "percentage_change"
+        arguments["old_value"] = numbers[0]
+        arguments["new_value"] = numbers[1]
+
+    if not operation:
+        return None
+
+    arguments["operation"] = operation
+    result = run_python_math_tool(arguments)
+    if not result.get("ok"):
+        return None
+
+    return {
+        "answer": str(result.get("formatted_result") or result.get("result")),
+        "tool_event": {
+            "tool_name": "python_math_tool",
+            "normalized_arguments": arguments,
+            "tool_result": result,
+            "fallback": "direct_structured",
+        },
+    }
+
+
 def _answer_with_math_tool(question: str, route_info: dict[str, Any]) -> dict[str, Any]:
+    direct_result = _direct_math_tool_result(question)
+    if direct_result:
+        return {
+            "question": question,
+            "answer": direct_result["answer"],
+            "sources_used": ["math_tool"],
+            "vector_queried_first": False,
+            "model_used": PUBLIC_MODEL_ID,
+            "tool_trace": [
+                {
+                    "order": 1,
+                    "tool": "math_router",
+                    "used": True,
+                    "result_count": 1,
+                    "decision": route_info.get("use_math_tool"),
+                    "reason": route_info.get("reason"),
+                },
+                {
+                    "order": 2,
+                    "tool": "python_math_tool",
+                    "used": True,
+                    "tool_called": True,
+                    "result_count": 1,
+                    "fallback": direct_result["tool_event"].get("fallback"),
+                },
+            ],
+            "retrieved_chunks": [],
+            "dp_db_results": [],
+            "web_sources": [],
+            "math_tool_trace": [direct_result["tool_event"]],
+            "duration_ms": None,
+        }
+
     last_error: Exception | None = None
 
     for model_name in _build_model_candidates():
@@ -392,20 +624,25 @@ def _answer_with_math_tool(question: str, route_info: dict[str, Any]) -> dict[st
                 if last_tool_result.get("ok"):
                     answer = str(last_tool_result.get("formatted_result") or last_tool_result.get("result") or "").strip()
 
+            if not answer:
+                direct_result = _direct_math_tool_result(question)
+                if direct_result:
+                    answer = direct_result["answer"]
+                    tool_called = True
+                    tool_events = [direct_result["tool_event"]]
+
             return {
                 "question": question,
                 "answer": answer or "I could not produce a math answer.",
                 "sources_used": ["math_tool"] if tool_called else [],
                 "vector_queried_first": False,
-                "model_used": model_name,
+                "model_used": PUBLIC_MODEL_ID,
                 "tool_trace": [
                     {
                         "order": 1,
                         "tool": "math_router",
                         "used": True,
                         "result_count": 1,
-                        "router_model": route_info.get("model_used"),
-                        "fallback_used": route_info.get("fallback_used", False),
                         "decision": route_info.get("use_math_tool"),
                         "reason": route_info.get("reason"),
                     },
@@ -432,20 +669,52 @@ def _answer_with_math_tool(question: str, route_info: dict[str, Any]) -> dict[st
                 exc,
             )
 
+    direct_result = _direct_math_tool_result(question)
+    if direct_result:
+        return {
+            "question": question,
+            "answer": direct_result["answer"],
+            "sources_used": ["math_tool"],
+            "vector_queried_first": False,
+            "model_used": PUBLIC_MODEL_ID,
+            "tool_trace": [
+                {
+                    "order": 1,
+                    "tool": "math_router",
+                    "used": True,
+                    "result_count": 1,
+                    "decision": route_info.get("use_math_tool"),
+                    "reason": route_info.get("reason"),
+                },
+                {
+                    "order": 2,
+                    "tool": "python_math_tool",
+                    "used": True,
+                    "tool_called": True,
+                    "result_count": 1,
+                    "fallback": "direct_after_model_error",
+                    "error": str(last_error) if last_error else None,
+                },
+            ],
+            "retrieved_chunks": [],
+            "dp_db_results": [],
+            "web_sources": [],
+            "math_tool_trace": [direct_result["tool_event"]],
+            "duration_ms": None,
+        }
+
     return {
         "question": question,
         "answer": f"Temporary math tool error: {last_error}",
         "sources_used": [],
         "vector_queried_first": False,
-        "model_used": PRIMARY_LLM_MODEL,
+        "model_used": PUBLIC_MODEL_ID,
         "tool_trace": [
             {
                 "order": 1,
                 "tool": "math_router",
                 "used": True,
                 "result_count": 1,
-                "router_model": route_info.get("model_used"),
-                "fallback_used": route_info.get("fallback_used", False),
                 "decision": route_info.get("use_math_tool"),
                 "reason": route_info.get("reason"),
             },
@@ -1174,6 +1443,22 @@ def _build_web_source_names(web_results: list[dict[str, Any]]) -> list[str]:
     return names
 
 
+def _has_relevant_vector_match(
+    vector_matches: list[dict[str, Any]],
+    min_similarity: float = 0.22,
+) -> bool:
+    for match in vector_matches:
+        try:
+            similarity = float(match.get("similarity", 0.0))
+        except Exception:
+            similarity = 0.0
+
+        if similarity >= min_similarity and str(match.get("content") or "").strip():
+            return True
+
+    return False
+
+
 def _query_vector_first(
     question: str,
     top_k: int,
@@ -1205,11 +1490,246 @@ def _query_vector_first(
     }
 
 
+def _chat_history_messages(
+    history: list[dict[str, Any]] | None,
+    max_messages: int = 500,
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for item in (history or [])[-max_messages:]:
+        role = str(item.get("role") or "").strip().lower()
+        content = str(item.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        messages.append({"role": role, "content": content})
+    return messages
+
+
+def _chat_history_text(
+    history: list[dict[str, Any]] | None,
+    max_messages: int = 500,
+) -> str:
+    lines = []
+    for message in _chat_history_messages(history, max_messages=max_messages):
+        role = "Kullanıcı" if message["role"] == "user" else "Asistan"
+        lines.append(f"{role}: {message['content']}")
+    return "\n".join(lines)
+
+
+def _answer_from_chat_memory(
+    question: str,
+    history: list[dict[str, Any]] | None,
+) -> str | None:
+    q = (question or "").lower().strip()
+    asks_name = any(
+        pattern in q
+        for pattern in (
+            "adım ne",
+            "adim ne",
+            "adım neydi",
+            "adim neydi",
+            "ismim ne",
+            "ismim neydi",
+            "benim adım ne",
+            "benim adim ne",
+            "benim adım neydi",
+            "benim adim neydi",
+            "bana ne deniyor",
+        )
+    )
+    if not asks_name:
+        return None
+
+    for item in reversed(history or []):
+        if str(item.get("role") or "").lower() != "user":
+            continue
+        content = str(item.get("content") or "").strip()
+        name = _extract_name_from_user_message(content)
+        if name:
+            return f"Senin adın {name}."
+
+    return None
+
+
+def _extract_name_from_user_message(message: str) -> str | None:
+    text = " ".join((message or "").strip().split())
+    if not text:
+        return None
+
+    lowered = text.lower()
+    if any(
+        phrase in lowered
+        for phrase in (
+            "adım ne",
+            "adim ne",
+            "adım neydi",
+            "adim neydi",
+            "ismim ne",
+            "ismim neydi",
+            "benim adım ne",
+            "benim adim ne",
+            "benim adım neydi",
+            "benim adim neydi",
+            "adımı biliyor",
+            "adimi biliyor",
+        )
+    ):
+        return None
+
+    name_word = r"([A-Za-zÇĞİÖŞÜçğıöşü]{2,}(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü]{2,})?)"
+    name_patterns = (
+        rf"\b(?:benim\s+)?ad[ıi]m\s+{name_word}\b",
+        rf"\b(?:benim\s+)?adim\s+{name_word}\b",
+        rf"\bismim\s+{name_word}\b",
+        rf"\b(?:merhaba|selam|hey|hi)?\s*ben\s+{name_word}\b",
+        rf"\b(?:merhaba|selam|hey|hi)?\s*{name_word}\s+ben\b",
+        rf"\bbana\s+{name_word}\s+de\b",
+    )
+    rejected_names = {
+        "ne",
+        "neydi",
+        "nedir",
+        "kim",
+        "ney",
+        "bilmiyorum",
+        "söylemedim",
+        "soylemedim",
+        "nasılsın",
+        "nasilsin",
+    }
+
+    for pattern in name_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        name = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?:;")
+        name_parts = [part.lower() for part in name.split()]
+        if name.lower() in rejected_names or any(part in rejected_names for part in name_parts):
+            continue
+        return " ".join(part[:1].upper() + part[1:] for part in name.split())
+
+    return None
+
+
+def _should_answer_directly(question: str) -> bool:
+    q = (question or "").lower().strip()
+    if not q:
+        return False
+
+    if _is_math_tool_candidate(question):
+        return False
+
+    tool_markers = (
+        "pdf",
+        "document",
+        "source",
+        "vector",
+        "dp db",
+        "database",
+        "audit",
+        "metadata",
+        "validation",
+        "package",
+        "npm",
+        "cve",
+        "github",
+        "latest",
+        "current",
+        "web",
+        "internet",
+        "internette",
+        "ara",
+        "search",
+        "water main",
+        "crli",
+        "ili",
+    )
+    if any(marker in q for marker in tool_markers):
+        return False
+
+    casual_markers = (
+        "hi",
+        "hello",
+        "hey",
+        "naber",
+        "selam",
+        "merhaba",
+        "nasılsın",
+        "nasilsin",
+        "en sevdiğin",
+        "en sevdigin",
+        "what is your favorite",
+        "who are you",
+        "kimsin",
+    )
+    if any(marker in q for marker in casual_markers):
+        return True
+
+    return len(q.split()) <= 12
+
+
+def _call_direct_llm(
+    question: str,
+    history: list[dict[str, Any]] | None = None,
+) -> tuple[str, str]:
+    history_text = _chat_history_text(history)
+    user_content = question
+    if history_text:
+        user_content = (
+            "Sohbet geçmişi:\n"
+            f"{history_text}\n\n"
+            "Son kullanıcı mesajı:\n"
+            f"{question}\n\n"
+            "Görev: Son mesaja cevap ver. Son mesaj önceki konuşmaya gönderme yapıyorsa cevabı sohbet geçmişinden çıkar. "
+            "Kullanıcının daha önce söylediği ad, tercih, konu, karar ve ayrıntıları hatırla. "
+            "Bilgi sohbet geçmişinde varsa 'söylemediniz' deme."
+        )
+
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "Sen ciddi ve profesyonel bir Türkçe asistansın.\n"
+                "Son kullanıcı mesajını yanıtla.\n"
+                "Sohbet geçmişi verilmişse, önceki mesajlardaki ad, tercih, konu ve göndermeleri dikkate al.\n"
+                "Geçmişte açıkça verilen bilgiyi bilmiyormuş gibi davranma.\n"
+                "Araç, kaynak veya yedek akış kullandığını söyleme.\n"
+                "Kısa ve doğal cevap ver."
+            ),
+        },
+        {"role": "user", "content": user_content},
+    ]
+
+    last_error = None
+    used_model = ""
+
+    for model in _build_model_candidates():
+        used_model = model
+        try:
+            response = create_chat_completion(
+                model=model,
+                messages=cast(Any, messages),
+                temperature=0.7,
+            )
+            return (response.choices[0].message.content or "").strip(), used_model
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "orchestrator_direct_llm_failed model=%s error=%s",
+                model,
+                exc,
+            )
+
+    return f"Temporary model error: {last_error}", used_model
+
+
 def _call_llm(
     question: str,
     context: str,
     source_names: list[str],
+    history: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
+    history_text = _chat_history_text(history)
+    history_block = f"\n\nPrevious chat:\n{history_text}" if history_text else ""
     style_instructions = _answer_style_instructions(question)
     messages: list[dict[str, str]] = [
         {
@@ -1257,7 +1777,7 @@ def _call_llm(
         },
         {
             "role": "user",
-            "content": f"Question:\n{question}\n\nContext:\n{context}",
+            "content": f"Question:\n{question}{history_block}\n\nContext:\n{context}",
         },
     ]
 
@@ -1267,7 +1787,7 @@ def _call_llm(
     for model in _build_model_candidates():
         used_model = model
         try:
-            response = client.chat.completions.create(
+            response = create_chat_completion(
                 model=model,
                 messages=cast(Any, messages),
                 temperature=0.0,
@@ -1782,6 +2302,40 @@ def _normalize_answer_tools(answer: str, sources_used: list[str]) -> str:
     return f"{body}\n\n{tools_block}\n\n{sources}".strip()
 
 
+def _direct_llm_response(
+    question: str,
+    total_start: float,
+    tool_trace: list[dict[str, Any]],
+    history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    memory_answer = _answer_from_chat_memory(question, history)
+    if memory_answer:
+        answer = memory_answer
+    else:
+        answer, _used_model = _call_direct_llm(question, history=history)
+
+    return {
+        "question": question,
+        "answer": answer,
+        "sources_used": ["llm"],
+        "vector_queried_first": False,
+        "model_used": PUBLIC_MODEL_ID,
+        "tool_trace": tool_trace
+        + [
+            {
+                "order": len(tool_trace) + 1,
+                "tool": "llm",
+                "used": True,
+                "mode": "direct_chat",
+            }
+        ],
+        "retrieved_chunks": [],
+        "dp_db_results": [],
+        "web_sources": [],
+        "duration_ms": round((perf_counter() - total_start) * 1000, 1),
+    }
+
+
 def _build_debug_trace(
     *,
     route_decision: dict[str, Any],
@@ -1815,6 +2369,7 @@ def answer_chat(
     top_k: int = 8,
     source: str | None = None,
     web_top_k: int = 5,
+    history: list[dict[str, Any]] | None = None,
     conversation_context: str | None = None,
 ) -> dict[str, Any]:
     total_start = perf_counter()
@@ -1842,12 +2397,13 @@ def answer_chat(
             "tool": "math_router",
             "used": True,
             "result_count": 1,
-            "router_model": math_route.get("model_used"),
-            "fallback_used": math_route.get("fallback_used", False),
             "decision": math_route.get("use_math_tool"),
             "reason": math_route.get("reason"),
         }
     ]
+
+    if _should_answer_directly(question):
+        return _direct_llm_response(question, total_start, tool_trace, history=history)
 
     vector_result = _query_vector_first(
         question=effective_question,
@@ -1936,6 +2492,9 @@ def answer_chat(
             "reason": route_decision.get("reason"),
         }
     )
+
+    if not use_dp_db and not use_web and not _has_relevant_vector_match(vector_matches):
+        return _direct_llm_response(question, total_start, tool_trace, history=history)
 
     dp_result = {
         "ok": True,
@@ -2092,6 +2651,7 @@ def answer_chat(
         question=question,
         context=combined_context,
         source_names=source_names,
+        history=history,
     )
     if use_dp_db and dp_result.get("rows") and _answer_looks_like_sql_leak(answer):
         fallback_answer = _build_generic_dp_db_rows_answer(
