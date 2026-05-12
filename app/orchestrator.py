@@ -1782,6 +1782,33 @@ def _normalize_answer_tools(answer: str, sources_used: list[str]) -> str:
     return f"{body}\n\n{tools_block}\n\n{sources}".strip()
 
 
+def _build_debug_trace(
+    *,
+    route_decision: dict[str, Any],
+    tool_trace: list[dict[str, Any]],
+    dp_result: dict[str, Any],
+    vector_matches: list[dict[str, Any]],
+    web_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    sql_queries = list(dp_result.get("sql_debug_queries") or [])
+    return {
+        "routing": {
+            "route": route_decision.get("route"),
+            "confidence": route_decision.get("confidence"),
+            "reason": route_decision.get("reason"),
+            "model_used": route_decision.get("model_used"),
+        },
+        "tool_trace": tool_trace,
+        "sql_queries": sql_queries,
+        "summary": {
+            "sql_query_count": len(sql_queries),
+            "vector_match_count": len(vector_matches),
+            "dp_db_row_count": len(dp_result.get("rows", [])),
+            "web_result_count": len(web_results),
+        },
+    }
+
+
 
 def answer_chat(
     question: str,
@@ -1953,6 +1980,14 @@ def answer_chat(
         }
     )
 
+    debug_trace = _build_debug_trace(
+        route_decision=route_decision,
+        tool_trace=tool_trace,
+        dp_result=dp_result,
+        vector_matches=vector_matches,
+        web_results=web_results,
+    )
+
     if public_web_only:
         sources_used = ["web_search"]
     else:
@@ -2025,6 +2060,7 @@ def answer_chat(
                 "retrieved_chunks": vector_matches,
                 "dp_db_results": dp_result.get("rows", []),
                 "web_sources": _public_web_results(web_results),
+                "debug_trace": debug_trace,
                 "duration_ms": round((perf_counter() - total_start) * 1000, 1),
             }
 
@@ -2048,6 +2084,7 @@ def answer_chat(
                 "retrieved_chunks": vector_matches,
                 "dp_db_results": dp_result.get("rows", []),
                 "web_sources": _public_web_results(web_results),
+                "debug_trace": debug_trace,
                 "duration_ms": round((perf_counter() - total_start) * 1000, 1),
             }
 
@@ -2078,5 +2115,6 @@ def answer_chat(
         "retrieved_chunks": vector_matches,
         "dp_db_results": dp_result.get("rows", []),
         "web_sources": _public_web_results(web_results),
+        "debug_trace": debug_trace,
         "duration_ms": round((perf_counter() - total_start) * 1000, 1),
     }

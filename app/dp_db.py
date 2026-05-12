@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Sequence, cast
 
@@ -21,6 +22,10 @@ from .rag import PRIMARY_LLM_MODEL, _build_model_candidates, client
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
 logger = logging.getLogger("rag.dp_db")
+_SQL_DEBUG_TRACE: ContextVar[list[dict[str, Any]]] = ContextVar(
+    "dp_db_sql_debug_trace",
+    default=[],
+)
 
 READ_ONLY_SQL_TIMEOUT_MS = 4000
 MAX_SQL_LIMIT = 50
@@ -62,12 +67,51 @@ def _connection(readonly: bool = False):
     return conn
 
 
+def _reset_sql_debug_trace() -> None:
+    _SQL_DEBUG_TRACE.set([])
+
+
+def _get_sql_debug_trace() -> list[dict[str, Any]]:
+    return [dict(item) for item in _SQL_DEBUG_TRACE.get()]
+
+
+def _append_sql_debug_trace(
+    sql: str,
+    params: Sequence[Any],
+    row_count: int,
+    query_mode: str,
+) -> None:
+    trace = list(_SQL_DEBUG_TRACE.get())
+    trace.append(
+        {
+            "query_mode": query_mode,
+            "sql": (sql or "").strip(),
+            "params": [str(value) for value in params],
+            "row_count": row_count,
+        }
+    )
+    _SQL_DEBUG_TRACE.set(trace)
+
+
+def _with_sql_debug_trace(result: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(result)
+    enriched["sql_debug_queries"] = _get_sql_debug_trace()
+    return enriched
+
+
 def _fetch_rows(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
     with _connection(readonly=True) as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(f"SET LOCAL statement_timeout = {READ_ONLY_SQL_TIMEOUT_MS}")
             cur.execute(sql, params)
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+            _append_sql_debug_trace(
+                sql=sql,
+                params=params,
+                row_count=len(rows),
+                query_mode="template_sql",
+            )
+            return rows
 
 
 def _question_has_any(question: str, tokens: Sequence[str]) -> bool:
@@ -797,7 +841,14 @@ def _execute_read_only_sql(sql: str) -> list[dict[str, Any]]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(f"SET LOCAL statement_timeout = {READ_ONLY_SQL_TIMEOUT_MS}")
             cur.execute(sql)
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+            _append_sql_debug_trace(
+                sql=sql,
+                params=(),
+                row_count=len(rows),
+                query_mode="generated_read_only_sql",
+            )
+            return rows
 
 
 def _query_npm_data(question: str, limit: int = 12) -> dict[str, Any]:
@@ -1514,42 +1565,43 @@ def inspect_sql_generation_path(question: str, limit: int = 12, execute_sql: boo
 
 
 def query_internal_data(question: str, limit: int = 12) -> dict[str, Any]:
+    _reset_sql_debug_trace()
     try:
         if _is_npm_question(question):
-            return _query_npm_data(question, limit)
+            return _with_sql_debug_trace(_query_npm_data(question, limit))
 
         if _is_product_question(question):
             product_result = _query_product_data(question, limit)
             if product_result.get("ok"):
-                return product_result
+                return _with_sql_debug_trace(product_result)
 
         if _prefer_template_query(question):
             if _is_aggregation_question(question):
-                return _query_aggregation_data(question, limit)
+                return _with_sql_debug_trace(_query_aggregation_data(question, limit))
 
             if _is_formula_question(question):
-                return _query_formula_data(question, limit)
+                return _with_sql_debug_trace(_query_formula_data(question, limit))
 
             if _is_validation_question(question):
-                return _query_validation_data(question, limit)
+                return _with_sql_debug_trace(_query_validation_data(question, limit))
 
         generated_result = _query_internal_data_via_safe_sql(question, limit)
         if generated_result and generated_result.get("ok"):
-            return generated_result
+            return _with_sql_debug_trace(generated_result)
 
         if _is_aggregation_question(question):
-            return _query_aggregation_data(question, limit)
+            return _with_sql_debug_trace(_query_aggregation_data(question, limit))
 
         if _is_formula_question(question):
-            return _query_formula_data(question, limit)
+            return _with_sql_debug_trace(_query_formula_data(question, limit))
 
         if _is_validation_question(question):
-            return _query_validation_data(question, limit)
+            return _with_sql_debug_trace(_query_validation_data(question, limit))
 
         if generated_result and not generated_result.get("ok"):
-            return generated_result
+            return _with_sql_debug_trace(generated_result)
 
-        return {
+        return _with_sql_debug_trace({
             "ok": True,
             "domain": "generic",
             "query_mode": "note",
@@ -1562,14 +1614,14 @@ def query_internal_data(question: str, limit: int = 12) -> dict[str, Any]:
                     )
                 }
             ],
-        }
+        })
     except Exception as exc:
         logger.exception("dp_db_query_failed")
-        return {
+        return _with_sql_debug_trace({
             "ok": False,
             "error": str(exc),
             "rows": [],
-        }
+        })
 
 
 def _format_dp_row(row: dict[str, Any], index: int, label: str) -> str:
