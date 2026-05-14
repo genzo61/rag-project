@@ -17,7 +17,7 @@ from .dp_knowledge_seed import SOURCE as DP_KNOWLEDGE_SOURCE
 from .dp_schema import all_allowed_tables, build_sql_schema_prompt, domain_tables
 from .embeddings import get_embedding
 from .mock_product_schema import has_mock_product_schema
-from .rag import PRIMARY_LLM_MODEL, _build_model_candidates, client
+from .rag import PRIMARY_LLM_MODEL, _build_model_candidates, client, create_chat_completion
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -380,6 +380,17 @@ def _extract_product_measurement_name(question: str) -> str | None:
 
 
 def _extract_product_location_hint(question: str) -> str | None:
+    normalized = " ".join((question or "").strip().split())
+    direct_patterns = (
+        r"([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})\s+b\S*lgesindeki",
+        r"([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})\s+district(?:\s+area)?",
+        r"([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})\s+region(?:\s+area)?",
+    )
+    for pattern in direct_patterns:
+        match = re.search(pattern, normalized, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
     for keywords in (
         ("district", "ilce", "ilçe"),
         ("region", "bolge", "bölge"),
@@ -788,7 +799,7 @@ def _generate_read_only_sql(question: str, domains: Sequence[str], limit: int) -
 
     for model_name in _build_model_candidates():
         try:
-            response = client.chat.completions.create(
+            response = create_chat_completion(
                 model=model_name,
                 messages=cast(Any, messages),
                 temperature=0.0,

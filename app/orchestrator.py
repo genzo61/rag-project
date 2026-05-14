@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import logging
 from time import perf_counter
@@ -24,7 +25,7 @@ from .math_tool_orchestrator import run_math_tool_conversation
 
 logger = logging.getLogger("rag.orchestrator")
 
-PUBLIC_MODEL_ID = "local-rag"
+PUBLIC_MODEL_ID = (os.getenv("LOCAL_CHAT_MODEL_ID", "") or PRIMARY_LLM_MODEL or "local-rag").strip()
 
 DP_DB_KEYWORDS = (
     "audit",
@@ -759,6 +760,101 @@ def _is_public_current_package_query(question: str) -> bool:
     return asks_current and asks_package and not asks_internal
 
 
+def _is_public_general_knowledge_query(question: str) -> bool:
+    q = (question or "").lower()
+    if not q:
+        return False
+
+    if detect_internal_data_domains(question):
+        return False
+
+    normalized_q = (
+        q.replace("ç", "c")
+        .replace("ğ", "g")
+        .replace("ı", "i")
+        .replace("ö", "o")
+        .replace("ş", "s")
+        .replace("ü", "u")
+    )
+
+    public_topic_markers = (
+        "world cup",
+        "dunya kupasi",
+        "fifa",
+        "olympics",
+        "olympic",
+        "nufus",
+        "population",
+        "baskent",
+        "capital",
+        "ulkeler",
+        "ilce",
+        "sehir",
+        "district",
+        "province",
+        "country",
+        "countries",
+    )
+    if any(marker in normalized_q for marker in public_topic_markers):
+        return True
+
+    if re.search(r"n\w?fus", normalized_q):
+        return True
+
+    if "ilce" in normalized_q and any(token in normalized_q for token in ("kac", "nedir", "nedir?", "kimdir")):
+        return True
+
+    if any(token in normalized_q for token in ("ulke", "ulkeler", "country", "countries")) and any(
+        ask in normalized_q for ask in ("hangi", "which", "where", "nerede", "oynanacak", "host")
+    ):
+        return True
+
+    has_year = bool(re.search(r"\b(?:19|20)\d{2}\b", normalized_q))
+    event_markers = ("cup", "kupa", "fifa", "olympic", "euro", "tournament", "turnuva")
+    return has_year and any(marker in normalized_q for marker in event_markers)
+
+
+def _normalize_public_text(question: str) -> str:
+    return (question or "").lower().translate(
+        str.maketrans(
+            {
+                "\u00e7": "c",
+                "\u011f": "g",
+                "\u0131": "i",
+                "\u00f6": "o",
+                "\u015f": "s",
+                "\u00fc": "u",
+            }
+        )
+    )
+
+
+def _looks_like_public_civic_query(question: str) -> bool:
+    normalized_q = _normalize_public_text(question)
+    if not normalized_q or detect_internal_data_domains(question):
+        return False
+
+    if "ilce" in normalized_q and any(token in normalized_q for token in ("kac", "nedir", "kimdir", "nufus", "population")):
+        return True
+
+    if re.search(r"il.?e", normalized_q) and (
+        re.search(r"ka.?t", normalized_q)
+        or re.search(r"n.?fus", normalized_q)
+        or "population" in normalized_q
+    ):
+        return True
+
+    if re.search(r"n\w?fus", normalized_q):
+        return True
+
+    if any(token in normalized_q for token in ("ulke", "ulkeler", "country", "countries")) and any(
+        ask in normalized_q for ask in ("hangi", "which", "where", "nerede", "oynanacak", "host")
+    ):
+        return True
+
+    return False
+
+
 def _is_internal_dp_db_candidate(question: str) -> bool:
     q = (question or "").lower()
     domains = detect_internal_data_domains(question)
@@ -1021,7 +1117,7 @@ def _rewrite_followup_question_with_model(
     last_error: Exception | None = None
     for model in _build_model_candidates():
         try:
-            response = client.chat.completions.create(
+            response = create_chat_completion(
                 model=model,
                 messages=cast(Any, messages),
                 temperature=0.0,
@@ -1358,7 +1454,7 @@ def _route_question_with_llm(
     for model in _build_model_candidates():
         used_model = model
         try:
-            response = client.chat.completions.create(
+            response = create_chat_completion(
                 model=model,
                 messages=cast(Any, messages),
                 temperature=0.0,
@@ -1613,6 +1709,15 @@ def _extract_name_from_user_message(message: str) -> str | None:
 def _should_answer_directly(question: str) -> bool:
     q = (question or "").lower().strip()
     if not q:
+        return False
+
+    if detect_internal_data_domains(question):
+        return False
+
+    if _is_public_general_knowledge_query(question):
+        return False
+
+    if _looks_like_public_civic_query(question):
         return False
 
     if _is_math_tool_candidate(question):
@@ -2307,6 +2412,8 @@ def _direct_llm_response(
     total_start: float,
     tool_trace: list[dict[str, Any]],
     history: list[dict[str, Any]] | None = None,
+    route: str = "direct_llm",
+    reason: str = "The question was handled as a direct chat response without retrieval.",
 ) -> dict[str, Any]:
     memory_answer = _answer_from_chat_memory(question, history)
     if memory_answer:
@@ -2332,6 +2439,30 @@ def _direct_llm_response(
         "retrieved_chunks": [],
         "dp_db_results": [],
         "web_sources": [],
+        "debug_trace": {
+            "routing": {
+                "route": route,
+                "confidence": 1.0,
+                "reason": reason,
+                "model_used": PUBLIC_MODEL_ID,
+            },
+            "tool_trace": tool_trace
+            + [
+                {
+                    "order": len(tool_trace) + 1,
+                    "tool": "llm",
+                    "used": True,
+                    "mode": "direct_chat",
+                }
+            ],
+            "sql_queries": [],
+            "summary": {
+                "sql_query_count": 0,
+                "vector_match_count": 0,
+                "dp_db_row_count": 0,
+                "web_result_count": 0,
+            },
+        },
         "duration_ms": round((perf_counter() - total_start) * 1000, 1),
     }
 
@@ -2403,7 +2534,14 @@ def answer_chat(
     ]
 
     if _should_answer_directly(question):
-        return _direct_llm_response(question, total_start, tool_trace, history=history)
+        return _direct_llm_response(
+            question,
+            total_start,
+            tool_trace,
+            history=history,
+            route="direct_llm",
+            reason="The question was classified as casual chat or direct conversation, so retrieval was skipped.",
+        )
 
     vector_result = _query_vector_first(
         question=effective_question,
@@ -2452,6 +2590,22 @@ def answer_chat(
             "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.8),
             "reason": "Current public package version or advisory questions should be answered with web evidence.",
         }
+    elif _is_public_general_knowledge_query(effective_question) and not effective_source:
+        selected_route = "web"
+        route_decision = {
+            **route_decision,
+            "route": "web",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.82),
+            "reason": "Public general-knowledge questions should be answered with web evidence rather than direct model recall.",
+        }
+    elif _looks_like_public_civic_query(effective_question) and not effective_source:
+        selected_route = "web"
+        route_decision = {
+            **route_decision,
+            "route": "web",
+            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.82),
+            "reason": "Public civic and demographic questions should be answered with web evidence rather than direct model recall.",
+        }
     elif internal_dp_db_candidate:
         selected_route = "vector_and_dp_db"
         route_decision = {
@@ -2467,14 +2621,6 @@ def answer_chat(
             "route": "web",
             "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.78),
             "reason": "Internal vector evidence is not sufficient, so the question is routed to web search.",
-        }
-    elif selected_route == "web" and vector_evidence_sufficient:
-        selected_route = "vector_only"
-        route_decision = {
-            **route_decision,
-            "route": "vector_only",
-            "confidence": max(float(route_decision.get("confidence", 0.0) or 0.0), 0.75),
-            "reason": "Vector DB evidence is sufficient for this question, so unnecessary web search is disabled.",
         }
     public_web_only = selected_route == "web"
     use_dp_db = selected_route == "vector_and_dp_db"
@@ -2494,7 +2640,14 @@ def answer_chat(
     )
 
     if not use_dp_db and not use_web and not _has_relevant_vector_match(vector_matches):
-        return _direct_llm_response(question, total_start, tool_trace, history=history)
+        return _direct_llm_response(
+            question,
+            total_start,
+            tool_trace,
+            history=history,
+            route="direct_llm_after_low_evidence",
+            reason="Retrieval did not produce strong enough evidence for vector or web routing, so the assistant fell back to direct chat.",
+        )
 
     dp_result = {
         "ok": True,

@@ -18,10 +18,29 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "ollama")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "")
 LLM_BACKEND = os.getenv("LLM_BACKEND", "openrouter").strip().lower()
+EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "").strip().lower()
 EMBEDDING_MAX_RETRIES = int(os.getenv("EMBEDDING_MAX_RETRIES", "6"))
 EMBEDDING_RETRY_DELAY_SECONDS = float(os.getenv("EMBEDDING_RETRY_DELAY_SECONDS", "0.5"))
 
-if LLM_BACKEND == "ollama":
+def _resolve_embedding_backend() -> str:
+    if EMBEDDING_BACKEND in {"ollama", "openrouter"}:
+        return EMBEDDING_BACKEND
+
+    if OPENROUTER_EMBEDDING_MODEL:
+        return "openrouter"
+
+    if OLLAMA_EMBED_MODEL:
+        return "ollama"
+
+    if LLM_BACKEND == "ollama":
+        return "ollama"
+
+    return "openrouter"
+
+
+ACTIVE_EMBEDDING_BACKEND = _resolve_embedding_backend()
+
+if ACTIVE_EMBEDDING_BACKEND == "ollama":
     EMBEDDING_BASE_URL = OLLAMA_BASE_URL.rstrip("/")
     if not EMBEDDING_BASE_URL.endswith("/v1"):
         EMBEDDING_BASE_URL = f"{EMBEDDING_BASE_URL}/v1"
@@ -45,7 +64,7 @@ def get_embedding(text: str) -> list[float]:
     last_error: Exception | None = None
     if not EMBEDDING_MODEL:
         raise RuntimeError(
-            "Embedding model is not configured. Set OPENROUTER_EMBEDDING_MODEL or OLLAMA_EMBED_MODEL."
+            "Embedding model is not configured. Set OPENROUTER_EMBEDDING_MODEL, OLLAMA_EMBED_MODEL, or EMBEDDING_BACKEND explicitly."
         )
 
     for attempt in range(1, EMBEDDING_MAX_RETRIES + 1):

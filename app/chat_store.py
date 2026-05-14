@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path("data") / "chat_history.sqlite3"
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+ENV_PATH = BASE_DIR / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
+DEFAULT_DB_PATH = BASE_DIR / "data" / "chat_history.sqlite3"
+DB_PATH = Path(os.getenv("CHAT_STORE_PATH", str(DEFAULT_DB_PATH))).expanduser()
 
 
 def _now_iso() -> str:

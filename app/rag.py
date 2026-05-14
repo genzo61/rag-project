@@ -32,7 +32,7 @@ OLLAMA_FALLBACK_MODELS = os.getenv("OLLAMA_FALLBACK_MODELS", "")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "ollama")
 
 LLM_BACKEND = os.getenv("LLM_BACKEND", "openrouter").strip().lower()
-SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://localhost:8080")
+SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://localhost:8089")
 
 def _normalize_openai_base_url(base_url: str) -> str:
     value = (base_url or "").rstrip("/")
@@ -86,7 +86,15 @@ def create_chat_completion(**kwargs: Any) -> Any:
             json=payload,
             timeout=300,
         )
-        response.raise_for_status()
+        if not response.ok:
+            body = (response.text or "").strip()
+            if len(body) > 500:
+                body = f"{body[:500]}..."
+            detail = body or response.reason or "Unknown Ollama error"
+            raise RuntimeError(
+                f"Ollama chat failed for model '{model}' "
+                f"({response.status_code} {response.reason}): {detail}"
+            )
         data = response.json()
         message_data = data.get("message", {}) or {}
 

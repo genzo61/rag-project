@@ -1,17 +1,27 @@
 import os
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extras import RealDictCursor, execute_values
 from dotenv import load_dotenv
 
 logger = logging.getLogger("rag.db")
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
+
+DOCUMENT_CHUNK_SOURCE_EXPR = "COALESCE(vmetadata->>'source', vmetadata->>'file_name', vmetadata->>'filename', collection_name)"
+DOCUMENT_CHUNK_PAGE_EXPR = """
+CASE
+    WHEN (vmetadata->>'page') ~ '^\\d+$' THEN (vmetadata->>'page')::int
+    ELSE 1
+END
+"""
 
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT"))
@@ -71,26 +81,26 @@ def _resolve_runtime_vector_dim() -> int:
         ) from exc
 
 
-def _documents_table_exists(conn) -> bool:
+def _table_exists(conn, table_name: str) -> bool:
     with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('public.documents')")
+        cur.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
         row = cur.fetchone()
         return bool(row and row[0])
 
 
-def _documents_embedding_dim(conn) -> int | None:
-    sql = """
+def _vector_column_dim(conn, table_name: str, column_name: str) -> int | None:
+    query = """
     SELECT format_type(a.atttypid, a.atttypmod)
     FROM pg_attribute a
     JOIN pg_class c ON c.oid = a.attrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public'
-      AND c.relname = 'documents'
-      AND a.attname = 'embedding'
+      AND c.relname = %s
+      AND a.attname = %s
       AND NOT a.attisdropped;
     """
     with conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(query, (table_name, column_name))
         row = cur.fetchone()
         if not row or not row[0]:
             return None
@@ -100,10 +110,39 @@ def _documents_embedding_dim(conn) -> int | None:
         return int(match.group(1))
 
 
-def _documents_row_count(conn) -> int:
+def _documents_embedding_dim(conn) -> int | None:
+    return _vector_column_dim(conn, "documents", "embedding")
+
+
+def _document_chunk_vector_dim(conn) -> int | None:
+    return _vector_column_dim(conn, "document_chunk", "vector")
+
+
+def _table_row_count(conn, table_name: str) -> int:
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM documents;")
+        cur.execute(
+            sql.SQL("SELECT COUNT(*) FROM {};").format(sql.Identifier(table_name))
+        )
         return int(cur.fetchone()[0])
+
+
+def _documents_row_count(conn) -> int:
+    return _table_row_count(conn, "documents")
+
+
+def _archive_documents_table(conn, current_dim: int) -> str:
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_table = f"documents_legacy_{current_dim}_{timestamp}"
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("CREATE TABLE {} AS TABLE documents;").format(
+                sql.Identifier(archive_table)
+            )
+        )
+        cur.execute("DROP TABLE documents;")
+
+    return archive_table
 
 
 def _create_documents_schema(conn, vector_dim: int) -> None:
@@ -135,7 +174,7 @@ def _ensure_documents_schema(conn, vector_dim: int) -> None:
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-    if not _documents_table_exists(conn):
+    if not _table_exists(conn, "documents"):
         _create_documents_schema(conn, vector_dim)
         return
 
@@ -159,6 +198,18 @@ def _ensure_documents_schema(conn, vector_dim: int) -> None:
 
     row_count = _documents_row_count(conn)
     if row_count > 0:
+        document_chunk_dim = _document_chunk_vector_dim(conn)
+        if document_chunk_dim == vector_dim:
+            archive_table = _archive_documents_table(conn, current_dim)
+            logger.warning(
+                "Archived legacy documents table to %s because documents.embedding=%d but active embedding dimension=%d; document_chunk already matches the active dimension.",
+                archive_table,
+                current_dim,
+                vector_dim,
+            )
+            _create_documents_schema(conn, vector_dim)
+            return
+
         raise RuntimeError(
             "documents.embedding dimension mismatch: "
             f"database={current_dim}, embedding_backend={vector_dim}. "
@@ -305,6 +356,7 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
         page_end,
         chunk_index,
         content,
+        'documents' AS backend,
         1 - (embedding <=> %s::vector) AS similarity
     FROM documents
     WHERE (%s::text IS NULL OR lower(source) = lower(%s::text) OR lower(source) = lower(%s::text || '.pdf'))
@@ -322,168 +374,236 @@ def search_similar(query_embedding: list[float], limit: int = 3, source: str | N
                 documents_sql,
                 (embedding_str, source, source, source, embedding_str, limit),
             )
-            rows = cur.fetchall()
+            rows = [dict(row) for row in cur.fetchall()]
 
-            if rows:
-                duration_ms = (perf_counter() - start) * 1000
-                logger.info(
-                    "search_similar backend=documents limit=%d rows=%d source=%s in %.1f ms",
-                    limit,
-                    len(rows),
-                    source,
-                    duration_ms,
-                )
-                return [dict(row) for row in rows]
+            chunk_rows: list[dict[str, Any]] = []
+            if _table_exists(conn, "document_chunk"):
+                chunk_dim = _document_chunk_vector_dim(conn)
+                if chunk_dim is not None:
+                    _validate_embedding_dimension(chunk_dim, query_dim, "search_similar_document_chunk")
 
-            cur.execute("SELECT to_regclass('public.document_chunk')")
-            table_ref = cur.fetchone()
-            table_exists = bool(table_ref and next(iter(table_ref.values()), None))
-            if not table_exists:
-                duration_ms = (perf_counter() - start) * 1000
-                logger.info(
-                    "search_similar backend=documents fallback=document_chunk_missing limit=%d rows=0 source=%s in %.1f ms",
-                    limit,
-                    source,
-                    duration_ms,
-                )
-                return []
-
-            source_expr = "COALESCE(vmetadata->>'source', vmetadata->>'file_name', vmetadata->>'filename', collection_name)"
-            chunk_sql = f"""
+                chunk_sql = f"""
             SELECT
                 id,
-                {source_expr} AS source,
-                CASE
-                    WHEN (vmetadata->>'page') ~ '^\\d+$' THEN (vmetadata->>'page')::int
-                    ELSE 1
-                END AS page_start,
-                CASE
-                    WHEN (vmetadata->>'page') ~ '^\\d+$' THEN (vmetadata->>'page')::int
-                    ELSE 1
-                END AS page_end,
+                {DOCUMENT_CHUNK_SOURCE_EXPR} AS source,
+                {DOCUMENT_CHUNK_PAGE_EXPR} AS page_start,
+                {DOCUMENT_CHUNK_PAGE_EXPR} AS page_end,
                 0 AS chunk_index,
                 text AS content,
+                'document_chunk' AS backend,
                 1 - (vector <=> %s::vector) AS similarity
             FROM document_chunk
             WHERE (
                 %s::text IS NULL
-                OR lower({source_expr}) = lower(%s::text)
-                OR lower({source_expr}) = lower(%s::text || '.pdf')
+                OR lower({DOCUMENT_CHUNK_SOURCE_EXPR}) = lower(%s::text)
+                OR lower({DOCUMENT_CHUNK_SOURCE_EXPR}) = lower(%s::text || '.pdf')
             )
             ORDER BY vector <=> %s::vector
             LIMIT %s;
             """
-            cur.execute(
-                chunk_sql,
-                (embedding_str, source, source, source, embedding_str, limit),
-            )
-            rows = cur.fetchall()
+                cur.execute(
+                    chunk_sql,
+                    (embedding_str, source, source, source, embedding_str, limit),
+                )
+                chunk_rows = [dict(row) for row in cur.fetchall()]
+
+    combined_rows = rows + chunk_rows
+    combined_rows.sort(key=lambda row: float(row.get("similarity", 0.0)), reverse=True)
+
+    deduped_rows: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, int | None, int | None, str]] = set()
+    for row in combined_rows:
+        key = (
+            normalize_source(str(row.get("source") or "")),
+            row.get("page_start"),
+            row.get("page_end"),
+            str(row.get("content") or "")[:240],
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped_rows.append(row)
+        if len(deduped_rows) >= limit:
+            break
 
     duration_ms = (perf_counter() - start) * 1000
     logger.info(
-        "search_similar backend=document_chunk limit=%d rows=%d source=%s in %.1f ms",
+        "search_similar backend=combined limit=%d documents_rows=%d chunk_rows=%d final_rows=%d source=%s in %.1f ms",
         limit,
         len(rows),
+        len(chunk_rows),
+        len(deduped_rows),
         source,
         duration_ms,
     )
-    return [dict(row) for row in rows]
+    return deduped_rows
 
 
 def list_documents(limit: int = 100) -> list[dict[str, Any]]:
-    sql = """
-    SELECT
-        id,
-        source,
-        page_start,
-        page_end,
-        chunk_index,
-        LEFT(content, 180) AS preview,
-        created_at
-    FROM documents
-    ORDER BY source, page_start, chunk_index
-    LIMIT %s;
-    """
-
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, (limit,))
-            rows = cur.fetchall()
-            return [dict(row) for row in rows]
-def list_sources() -> list[str]:
-    sql = """
-    SELECT DISTINCT source
-    FROM documents
-    ORDER BY source;
-    """
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    source,
+                    page_start,
+                    page_end,
+                    chunk_index,
+                    LEFT(content, 180) AS preview,
+                    created_at
+                FROM documents
+                ORDER BY source, page_start, chunk_index
+                LIMIT %s;
+                """,
+                (limit,),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
 
+            chunk_rows: list[dict[str, Any]] = []
+            if _table_exists(conn, "document_chunk"):
+                cur.execute(
+                    f"""
+                SELECT
+                    id,
+                    {DOCUMENT_CHUNK_SOURCE_EXPR} AS source,
+                    {DOCUMENT_CHUNK_PAGE_EXPR} AS page_start,
+                    {DOCUMENT_CHUNK_PAGE_EXPR} AS page_end,
+                    0 AS chunk_index,
+                    LEFT(text, 180) AS preview,
+                    NULL::timestamp AS created_at
+                FROM document_chunk
+                ORDER BY source, page_start, id
+                LIMIT %s;
+                """,
+                    (limit,),
+                )
+                chunk_rows = [dict(row) for row in cur.fetchall()]
+
+            combined_rows = rows + chunk_rows
+            combined_rows.sort(
+                key=lambda row: (
+                    str(row.get("source") or ""),
+                    int(row.get("page_start") or 0),
+                    int(row.get("chunk_index") or 0),
+                    str(row.get("id") or ""),
+                )
+            )
+            return combined_rows[:limit]
+def list_sources() -> list[str]:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
-            rows = cur.fetchall()
-            return [row[0] for row in rows]
+            cur.execute(
+                """
+                SELECT DISTINCT source
+                FROM documents
+                ORDER BY source;
+                """
+            )
+            rows = [row[0] for row in cur.fetchall() if row and row[0]]
+
+            chunk_rows: list[str] = []
+            if _table_exists(conn, "document_chunk"):
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT {DOCUMENT_CHUNK_SOURCE_EXPR} AS source
+                    FROM document_chunk
+                    ORDER BY source;
+                    """
+                )
+                chunk_rows = [row[0] for row in cur.fetchall() if row and row[0]]
+
+            merged: list[str] = []
+            seen: set[str] = set()
+            for source in rows + chunk_rows:
+                normalized = str(source).strip()
+                if not normalized:
+                    continue
+                key = normalized.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(normalized)
+            return merged
 
 def count_documents() -> int:
-    documents_sql = "SELECT COUNT(*) FROM documents;"
-    chunk_sql = "SELECT COUNT(*) FROM document_chunk;"
-    table_check_sql = "SELECT to_regclass('public.document_chunk');"
-
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(documents_sql)
+            cur.execute("SELECT COUNT(*) FROM documents;")
             documents_count = int(cur.fetchone()[0])
-            if documents_count > 0:
-                return documents_count
-
-            cur.execute(table_check_sql)
-            table_ref = cur.fetchone()
-            if not table_ref or not table_ref[0]:
-                return 0
-
-            cur.execute(chunk_sql)
-            chunk_count = int(cur.fetchone()[0])
-            return chunk_count
+            chunk_count = 0
+            if _table_exists(conn, "document_chunk"):
+                cur.execute("SELECT COUNT(*) FROM document_chunk;")
+                chunk_count = int(cur.fetchone()[0])
+            return documents_count + chunk_count
 
 
 def count_documents_by_source(source: str) -> int:
     normalized = normalize_source(source)
 
-    sql = """
-    SELECT COUNT(*)
-    FROM documents
-    WHERE lower(source) = lower(%s)
-       OR lower(source) = lower(%s);
-    """
-
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (normalized, normalized + ".pdf"))
-            return int(cur.fetchone()[0])
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM documents
+                WHERE lower(source) = lower(%s)
+                   OR lower(source) = lower(%s);
+                """,
+                (normalized, normalized + ".pdf"),
+            )
+            documents_count = int(cur.fetchone()[0])
+
+            chunk_count = 0
+            if _table_exists(conn, "document_chunk"):
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM document_chunk
+                    WHERE lower({DOCUMENT_CHUNK_SOURCE_EXPR}) = lower(%s)
+                       OR lower({DOCUMENT_CHUNK_SOURCE_EXPR}) = lower(%s);
+                    """,
+                    (normalized, normalized + ".pdf"),
+                )
+                chunk_count = int(cur.fetchone()[0])
+            return documents_count + chunk_count
 
 
 def delete_by_source(source: str) -> int:
     normalized = normalize_source(source)
 
-    sql = """
-    DELETE FROM documents
-    WHERE lower(source) = lower(%s)
-       OR lower(source) = lower(%s);
-    """
-
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (normalized, normalized + ".pdf"))
+            cur.execute(
+                """
+                DELETE FROM documents
+                WHERE lower(source) = lower(%s)
+                   OR lower(source) = lower(%s);
+                """,
+                (normalized, normalized + ".pdf"),
+            )
             deleted = cur.rowcount
+            if _table_exists(conn, "document_chunk"):
+                cur.execute(
+                    f"""
+                    DELETE FROM document_chunk
+                    WHERE lower({DOCUMENT_CHUNK_SOURCE_EXPR}) = lower(%s)
+                       OR lower({DOCUMENT_CHUNK_SOURCE_EXPR}) = lower(%s);
+                    """,
+                    (normalized, normalized + ".pdf"),
+                )
+                deleted += cur.rowcount
         conn.commit()
         return deleted
 
 
 def delete_all_documents() -> int:
-    sql = "DELETE FROM documents;"
-
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute("DELETE FROM documents;")
             deleted = cur.rowcount
+            if _table_exists(conn, "document_chunk"):
+                cur.execute("DELETE FROM document_chunk;")
+                deleted += cur.rowcount
         conn.commit()
         return deleted

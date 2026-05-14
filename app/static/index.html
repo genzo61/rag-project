@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Yerel Asistan</title>
+    <title>AI Assistant</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -11,9 +11,14 @@
       <aside class="sidebar">
         <div class="brand">
           <div>
-            <h1>Yerel Asistan</h1>
-            <p>Sohbet geçmişi</p>
+            <h1>AI Assistant</h1>
+            <p>/ai-orchestrator</p>
           </div>
+        </div>
+        <div class="sidebarActions">
+          <button id="newChatButton" class="iconButton" type="button" title="New chat" aria-label="New chat">
+            <span aria-hidden="true">+</span>
+          </button>
         </div>
         <div id="sessions" class="sessions"></div>
       </aside>
@@ -21,25 +26,24 @@
       <section class="chat">
         <header class="chatHeader">
           <div>
-            <h2 id="chatTitle">Yeni sohbet</h2>
-            <p id="chatMeta">Mesajlar otomatik yedeklenir.</p>
+            <h2 id="chatTitle">New chat</h2>
+            <p id="chatMeta">Separate history is kept for each chat.</p>
           </div>
           <div class="headerActions">
-            <button id="newChatButton" class="iconButton" type="button" title="Yeni sohbet" aria-label="Yeni sohbet">
-              <span aria-hidden="true">+</span>
-            </button>
-            <button id="deleteChatButton" type="button">Sil</button>
+            <button id="backupNowButton" type="button" title="Back up this chat to the backend">Backup</button>
+            <button id="deleteChatButton" type="button">Delete</button>
           </div>
         </header>
 
         <div id="messages" class="messages"></div>
 
         <form id="chatForm" class="composer">
-          <textarea id="promptInput" rows="2" placeholder="Bir şey yaz..." required></textarea>
-          <button id="sendButton" type="submit">Gönder</button>
+          <textarea id="promptInput" rows="2" placeholder="Ask a question..." required></textarea>
+          <button id="sendButton" type="submit">Send</button>
         </form>
       </section>
     </main>
+    <script src="/runtime-config.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

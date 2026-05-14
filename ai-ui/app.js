@@ -13,6 +13,29 @@ const SETTINGS_KEY = "aiUiSettingsV1";
 const STORAGE_KEY = "aiUiChatsV1";
 const ACTIVE_KEY = "aiUiActiveChatIdV1";
 
+function getRuntimeConfig() {
+  if (typeof window === "undefined") return {};
+  const value = window.__RAG_RUNTIME_CONFIG__;
+  return value && typeof value === "object" ? value : {};
+}
+
+const DEFAULT_MODEL_ID = String(getRuntimeConfig().model || "local-rag").trim() || "local-rag";
+
+function detectDefaultApiBaseUrl() {
+  const runtimeValue = String(getRuntimeConfig().apiBaseUrl || "").trim();
+  if (runtimeValue) return runtimeValue;
+
+  const params = new URLSearchParams(window.location.search);
+  const queryValue = (params.get("apiBaseUrl") || "").trim();
+  if (queryValue) return queryValue;
+
+  if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+    return window.location.origin;
+  }
+
+  return String(loadSettings().aiBaseUrl || "").trim();
+}
+
 function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -24,8 +47,8 @@ function loadSettings() {
 
 function defaultSettings() {
   return {
-    aiBaseUrl: "http://127.0.0.1:8090",
-    model: "local-rag",
+    aiBaseUrl: detectDefaultApiBaseUrl(),
+    model: DEFAULT_MODEL_ID,
   };
 }
 
@@ -39,6 +62,10 @@ function saveSettings(settings) {
 
 let settings = getSettings();
 saveSettings(settings);
+
+function getApiBaseUrl() {
+  return String(settings.aiBaseUrl || detectDefaultApiBaseUrl()).trim().replace(/\/+$/, "");
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -107,6 +134,48 @@ function chatPreview(chat) {
 let state = loadChats();
 let activeChatId = localStorage.getItem(ACTIVE_KEY) || "";
 
+async function importChatsFromBackend(limit = 20) {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/chat/sessions?limit=${limit}`);
+  if (!response.ok) {
+    throw new Error("Could not load chat history.");
+  }
+
+  const data = await response.json();
+  const sessions = Array.isArray(data && data.items) ? data.items : [];
+  if (!sessions.length) {
+    return false;
+  }
+
+  const hydrated = await Promise.all(
+    sessions.map(async (session) => {
+      const details = await fetch(`${baseUrl}/chat/sessions/${session.id}`);
+      if (!details.ok) {
+        return null;
+      }
+      const payload = await details.json();
+      const messages = Array.isArray(payload && payload.messages) ? payload.messages : [];
+      return {
+        id: session.id,
+        title: session.title || "Chat",
+        created_at: session.created_at || nowIso(),
+        updated_at: session.updated_at || nowIso(),
+        messages: messages.map((message) => ({
+          role: message.role,
+          content: typeof message.content === "string" ? message.content : String(message.content ?? ""),
+        })),
+        backend_session_id: session.id,
+        backed_up: true,
+        backup_session_id: session.id,
+      };
+    })
+  );
+
+  state.items = hydrated.filter(Boolean);
+  saveChats(state);
+  return state.items.length > 0;
+}
+
 function getActiveChat() {
   return state.items.find((c) => c.id === activeChatId) || null;
 }
@@ -132,7 +201,7 @@ function ensureSomeChat() {
     updated_at: nowIso(),
     messages: [],
     backend_session_id: null,
-    backed_up_to_8090: false,
+    backed_up: false,
     backup_session_id: null,
   };
   state.items.unshift(chat);
@@ -168,9 +237,9 @@ function loadChat(chatId) {
   if (!chat) return;
   setActiveChat(chat.id);
   chatTitleEl.textContent = chat.title || "Sohbet";
-  const metaParts = [`${chat.messages.length} mesaj`];
-  if (chat.backed_up_to_8090 && chat.backup_session_id) {
-    metaParts.push(`8090 yedek: ${chat.backup_session_id}`);
+  const metaParts = [`${chat.messages.length} mesaj`, settings.model || DEFAULT_MODEL_ID];
+  if (chat.backed_up && chat.backup_session_id) {
+    metaParts.push(`Yedek id: ${chat.backup_session_id}`);
   }
   chatMetaEl.textContent = metaParts.join(" | ");
   renderMessages(chat.messages);
@@ -178,9 +247,9 @@ function loadChat(chatId) {
   promptInput.focus();
 }
 
-async function backupChatTo8090(chat) {
+async function backupChat(chat) {
   if (!chat || !chat.messages.length) return null;
-  const baseUrl = (settings.aiBaseUrl || "http://127.0.0.1:8090").replace(/\/+$/, "");
+  const baseUrl = getApiBaseUrl();
   const response = await fetch(`${baseUrl}/chat/backup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -201,11 +270,11 @@ async function createNewChat({ backupPrevious } = { backupPrevious: true }) {
 
   if (backupPrevious && previous && previous.messages.length) {
     try {
-      const result = await backupChatTo8090(previous);
-      previous.backed_up_to_8090 = true;
+      const result = await backupChat(previous);
+      previous.backed_up = true;
       previous.backup_session_id = result && result.session_id ? result.session_id : null;
     } catch {
-      previous.backed_up_to_8090 = false;
+      previous.backed_up = false;
     }
   }
 
@@ -216,7 +285,7 @@ async function createNewChat({ backupPrevious } = { backupPrevious: true }) {
     updated_at: nowIso(),
     messages: [],
     backend_session_id: null,
-    backed_up_to_8090: false,
+    backed_up: false,
     backup_session_id: null,
   };
   state.items.unshift(chat);
@@ -242,7 +311,7 @@ function deleteActiveChat() {
 
 async function ensureBackendSession(chat) {
   if (chat.backend_session_id) return chat.backend_session_id;
-  const baseUrl = (settings.aiBaseUrl || "http://127.0.0.1:8090").replace(/\/+$/, "");
+  const baseUrl = getApiBaseUrl();
   const response = await fetch(`${baseUrl}/chat/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -272,7 +341,7 @@ async function sendMessage(text) {
   promptInput.disabled = true;
 
   try {
-    const baseUrl = (settings.aiBaseUrl || "http://127.0.0.1:8090").replace(/\/+$/, "");
+    const baseUrl = getApiBaseUrl();
     const sessionId = await ensureBackendSession(chat);
     const response = await fetch(`${baseUrl}/chat`, {
       method: "POST",
@@ -331,8 +400,8 @@ backupNowButton.addEventListener("click", async () => {
   const chat = getActiveChat();
   if (!chat) return;
   try {
-    const result = await backupChatTo8090(chat);
-    chat.backed_up_to_8090 = true;
+    const result = await backupChat(chat);
+    chat.backed_up = true;
     chat.backup_session_id = result && result.session_id ? result.session_id : null;
     saveChats(state);
     loadChat(chat.id);
@@ -341,5 +410,17 @@ backupNowButton.addEventListener("click", async () => {
   }
 });
 
-ensureSomeChat();
-loadChat(activeChatId);
+async function bootstrap() {
+  if (!state.items.length) {
+    try {
+      await importChatsFromBackend();
+    } catch {
+      // Fall back to an empty local chat if server history cannot be loaded.
+    }
+  }
+
+  ensureSomeChat();
+  loadChat(activeChatId);
+}
+
+bootstrap();

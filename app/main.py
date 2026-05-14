@@ -2,6 +2,7 @@ import logging
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from collections import OrderedDict
@@ -12,10 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Any
+from dotenv import load_dotenv
 
 from .chat_store import (
     add_message,
@@ -28,9 +30,13 @@ from .chat_store import (
     list_sessions,
     update_session_title,
 )
+from .dp_knowledge_seed import seed_dp_assistant_knowledge
 from .db import count_documents, delete_by_source, init_db, list_documents, list_sources
-from .rag import ask_question, ingest_pdf, normalize_source
+from .rag import PRIMARY_LLM_MODEL, ask_question, ingest_pdf, normalize_source
 from .orchestrator import answer_chat
+
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 def configure_logging() -> None:
     log_dir = Path("logs")
@@ -62,7 +68,7 @@ def configure_logging() -> None:
 configure_logging()
 logger = logging.getLogger("rag.api")
 
-API_MODEL_ID = "local-rag"
+API_MODEL_ID = (os.getenv("LOCAL_CHAT_MODEL_ID", "") or PRIMARY_LLM_MODEL or "local-rag").strip()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(
@@ -83,7 +89,21 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 DEBUG_TRACE_STORE: OrderedDict[str, dict[str, Any]] = OrderedDict()
-DEBUG_TRACE_LIMIT = 100
+DEBUG_TRACE_LIMIT = int(os.getenv("DEBUG_TRACE_LIMIT", "100"))
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _seed_dp_assistant_knowledge_safe() -> None:
+    try:
+        seed_dp_assistant_knowledge()
+    except Exception as exc:
+        logger.exception("startup_seed_dp_assistant_knowledge_failed error=%s", exc)
 
 @app.middleware("http")
 async def log_request_timing(request: Request, call_next):
@@ -338,6 +358,25 @@ def _extract_conversation_context(messages: list[ChatMessage], max_turns: int = 
     return "\n".join(lines)
 
 
+def _conversation_context_from_history(
+    history: list[dict[str, Any]] | None,
+    max_turns: int = 6,
+) -> str:
+    items = [item for item in (history or []) if str(item.get("content") or "").strip()]
+    if not items:
+        return ""
+
+    history_items = items[-max_turns:]
+    lines: list[str] = []
+    for item in history_items:
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        label = "USER" if role == "user" else "ASSISTANT"
+        lines.append(f"{label}: {str(item.get('content') or '').strip()}")
+    return "\n".join(lines)
+
+
 def _build_chat_completion_response(
     completion_id: str,
     created_ts: int,
@@ -385,6 +424,16 @@ def _safe_json(value: Any, limit: int = 8000) -> str:
     return text[:limit]
 
 
+def _runtime_ui_config() -> dict[str, str]:
+    return {
+        "apiBaseUrl": (
+            os.getenv("RAG_UI_API_BASE_URL", "")
+            or os.getenv("DEBUG_TRACE_BASE_URL", "")
+        ).strip().rstrip("/"),
+        "model": (os.getenv("RAG_UI_MODEL_ID", "") or API_MODEL_ID).strip(),
+    }
+
+
 def _store_debug_trace(
     trace: dict[str, Any] | None,
     request: Request | None = None,
@@ -397,6 +446,12 @@ def _store_debug_trace(
     while len(DEBUG_TRACE_STORE) > DEBUG_TRACE_LIMIT:
         DEBUG_TRACE_STORE.popitem(last=False)
     path = f"/debug/traces/{trace_id}"
+    explicit_base_url = (
+        os.getenv("DEBUG_TRACE_BASE_URL", "") or os.getenv("PUBLIC_BASE_URL", "")
+    ).strip().rstrip("/")
+    if explicit_base_url:
+        return trace_id, f"{explicit_base_url}{path}"
+
     if request is not None:
         forwarded_proto = (request.headers.get("x-forwarded-proto") or "").strip()
         forwarded_host = (request.headers.get("x-forwarded-host") or "").strip()
@@ -431,9 +486,6 @@ def _store_debug_trace(
         if host_value:
             return trace_id, f"{scheme}://{host_value}{path}"
 
-    explicit_base_url = (os.getenv("DEBUG_TRACE_BASE_URL", "") or os.getenv("PUBLIC_BASE_URL", "")).strip().rstrip("/")
-    if explicit_base_url:
-        return trace_id, f"{explicit_base_url}{path}"
     return trace_id, path
 
 
@@ -527,6 +579,20 @@ def _build_models_response() -> dict[str, Any]:
 def startup_event():
     init_db()
     init_chat_store()
+    if not _env_flag("DP_ASSISTANT_SEED_ON_STARTUP", True):
+        logger.info("startup_seed_dp_assistant_knowledge skipped via env")
+        return
+
+    if _env_flag("DP_ASSISTANT_SEED_ASYNC", True):
+        threading.Thread(
+            target=_seed_dp_assistant_knowledge_safe,
+            name="dp-assistant-seed",
+            daemon=True,
+        ).start()
+        logger.info("startup_seed_dp_assistant_knowledge scheduled async=true")
+        return
+
+    _seed_dp_assistant_knowledge_safe()
 
 
 @app.get("/")
@@ -535,6 +601,15 @@ def root():
     if index_path.exists():
         return FileResponse(index_path)
     return {"message": "RAG API ayakta."}
+
+
+@app.get("/runtime-config.js")
+def runtime_config_js():
+    payload = json.dumps(_runtime_ui_config(), ensure_ascii=False)
+    return Response(
+        content=f"window.__RAG_RUNTIME_CONFIG__ = {payload};\n",
+        media_type="application/javascript",
+    )
 
 
 @app.get("/debug/traces/{trace_id}", response_class=HTMLResponse)
@@ -605,13 +680,18 @@ def chat(payload: OrchestratedChatRequest, request: Request):
         history = [*stored_history, *payload_history]
         add_message(session_id, "user", question)
 
+        conversation_context = (
+            (payload.conversation_context or "").strip()
+            or _conversation_context_from_history(history)
+        )
+
         result = answer_chat(
             question=question,
             top_k=payload.top_k,
             source = payload.source,
             web_top_k = payload.web_top_k,
             history=history,
-            conversation_context=payload.conversation_context,
+            conversation_context=conversation_context,
         )
         debug_trace_id, debug_trace_url = _store_debug_trace(
             result.get("debug_trace") if isinstance(result, dict) else None,
