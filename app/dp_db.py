@@ -495,6 +495,23 @@ def _is_product_question(question: str) -> bool:
         return False
 
     q = _normalize_internal_domain_typos(question)
+
+    public_civic_markers = (
+        "nufus",
+        "population",
+        "baskent",
+        "capital",
+        "ulke",
+        "ulkeler",
+        "country",
+        "countries",
+    )
+    if any(marker in q for marker in public_civic_markers):
+        return False
+
+    if ("ilce" in q or "ilçe" in (question or "").lower()) and any(token in q for token in ("kac", "nedir", "kimdir")):
+        return False
+
     if _extract_product_measurement_name(question):
         return True
 

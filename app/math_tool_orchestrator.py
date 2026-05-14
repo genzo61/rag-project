@@ -29,6 +29,49 @@ Rules:
 - Do not add source lists, tool boilerplate, or extra process narration in the final answer.
 """
 
+MATH_TOOL_JSON_FALLBACK_SYSTEM_PROMPT = """You are a math planner.
+
+Convert the user's question into strict JSON arguments for the python_math_tool.
+
+Rules:
+- Return JSON only.
+- For arithmetic or word problems, prefer:
+  {"mode":"expression","expression":"..."}
+- For named operations, return:
+  {"mode":"structured","operation":"mean","numbers":[...]}
+- Use only the supported operations:
+  mean, weighted_mean, percentage_change, percentage_of, count_greater_than, median, sum
+- Do not solve the math in text.
+- Do not add markdown fences.
+- If the user asks a non-computational conceptual math question, return:
+  {"mode":"none","reason":"conceptual"}
+"""
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    value = (text or "").strip()
+    if not value:
+        return None
+
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    start = value.find("{")
+    end = value.rfind("}")
+    if start < 0 or end <= start:
+        return None
+
+    try:
+        parsed = json.loads(value[start : end + 1])
+    except Exception:
+        return None
+
+    return parsed if isinstance(parsed, dict) else None
+
 
 def _tool_call_to_message_payload(tool_call: Any) -> dict[str, Any]:
     return {
@@ -157,5 +200,73 @@ def run_math_tool_conversation(
         "tool_events": tool_events,
         "final_answer": final_answer.strip(),
         "raw_responses": raw_responses,
+        "duration_ms": round((perf_counter() - started_at) * 1000, 1),
+    }
+
+
+def run_math_tool_via_json_plan(
+    client: OpenAI,
+    model: str,
+    question: str,
+    max_tokens: int = 220,
+) -> dict[str, Any]:
+    started_at = perf_counter()
+    response = create_chat_completion(
+        model=model,
+        messages=cast(
+            Any,
+            [
+                {"role": "system", "content": MATH_TOOL_JSON_FALLBACK_SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ],
+        ),
+        temperature=0.0,
+        max_tokens=max_tokens,
+    )
+
+    content = response.choices[0].message.content or ""
+    parsed_arguments = _extract_json_object(content) or {}
+    if str(parsed_arguments.get("mode") or "").strip().lower() == "none":
+        return {
+            "question": question,
+            "model": model,
+            "tool_called": False,
+            "tool_events": [],
+            "final_answer": "",
+            "raw_responses": [{"round": 1, "content": content, "tool_call_count": 0}],
+            "duration_ms": round((perf_counter() - started_at) * 1000, 1),
+        }
+
+    normalized_arguments = normalize_python_math_tool_arguments(parsed_arguments)
+    raw_validation = validate_python_math_tool_arguments(parsed_arguments)
+    validation = validate_python_math_tool_arguments(normalized_arguments)
+    if not validation.get("ok"):
+        raise ValueError(validation.get("error", "invalid tool arguments"))
+
+    tool_result = run_python_math_tool(normalized_arguments)
+    tool_events = [
+        {
+            "tool_name": PYTHON_MATH_TOOL_NAME,
+            "raw_arguments": json.dumps(parsed_arguments, ensure_ascii=False),
+            "parsed_arguments": parsed_arguments,
+            "normalized_arguments": normalized_arguments,
+            "raw_validation": raw_validation,
+            "normalized_validation": validation,
+            "tool_result": tool_result,
+            "fallback": "json_plan",
+        }
+    ]
+
+    final_answer = ""
+    if tool_result.get("ok"):
+        final_answer = str(tool_result.get("formatted_result") or tool_result.get("result") or "").strip()
+
+    return {
+        "question": question,
+        "model": model,
+        "tool_called": True,
+        "tool_events": tool_events,
+        "final_answer": final_answer,
+        "raw_responses": [{"round": 1, "content": content, "tool_call_count": 0}],
         "duration_ms": round((perf_counter() - started_at) * 1000, 1),
     }

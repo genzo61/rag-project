@@ -21,7 +21,7 @@ from .rag import (
     web_search,
 )
 from .math_tool import run_python_math_tool
-from .math_tool_orchestrator import run_math_tool_conversation
+from .math_tool_orchestrator import run_math_tool_conversation, run_math_tool_via_json_plan
 
 logger = logging.getLogger("rag.orchestrator")
 
@@ -481,6 +481,215 @@ def _numbers_from_question(question: str) -> list[float]:
     return numbers
 
 
+TURKISH_NUMBER_WORDS = {
+    "sifir": 0,
+    "bir": 1,
+    "iki": 2,
+    "uc": 3,
+    "dort": 4,
+    "bes": 5,
+    "alti": 6,
+    "yedi": 7,
+    "sekiz": 8,
+    "dokuz": 9,
+    "on": 10,
+    "yirmi": 20,
+    "otuz": 30,
+    "kirk": 40,
+    "elli": 50,
+    "altmis": 60,
+    "yetmis": 70,
+    "seksen": 80,
+    "doksan": 90,
+    "yuz": 100,
+}
+
+
+def _normalize_turkish_text(text: str) -> str:
+    return (text or "").lower().translate(
+        str.maketrans(
+            {
+                "\u00e7": "c",
+                "\u011f": "g",
+                "\u0131": "i",
+                "\u00f6": "o",
+                "\u015f": "s",
+                "\u00fc": "u",
+            }
+        )
+    )
+
+
+def _parse_turkish_number_phrase(phrase: str) -> float | None:
+    tokens = [token for token in re.findall(r"[a-z]+", _normalize_turkish_text(phrase)) if token]
+    if not tokens:
+        return None
+
+    total = 0
+    current = 0
+    matched = False
+    for token in tokens:
+        if token not in TURKISH_NUMBER_WORDS:
+            return None
+        matched = True
+        value = TURKISH_NUMBER_WORDS[token]
+        if value == 100:
+            current = max(current, 1) * 100
+        elif value >= 10:
+            current += value
+        else:
+            current += value
+
+    if not matched:
+        return None
+    total += current
+    return float(total)
+
+
+def _format_math_expression_number(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.10f}".rstrip("0").rstrip(".")
+
+
+def _question_uses_turkish_number_words(question: str) -> bool:
+    normalized = _normalize_turkish_text(question)
+    tokens = set(re.findall(r"[a-z]+", normalized))
+    return bool(tokens & set(TURKISH_NUMBER_WORDS.keys()))
+
+
+def _integer_to_turkish_words(value: int) -> str:
+    ones = {
+        0: "sifir",
+        1: "bir",
+        2: "iki",
+        3: "uc",
+        4: "dort",
+        5: "bes",
+        6: "alti",
+        7: "yedi",
+        8: "sekiz",
+        9: "dokuz",
+    }
+    tens = {
+        10: "on",
+        20: "yirmi",
+        30: "otuz",
+        40: "kirk",
+        50: "elli",
+        60: "altmis",
+        70: "yetmis",
+        80: "seksen",
+        90: "doksan",
+    }
+
+    if value == 0:
+        return ones[0]
+    if value < 0:
+        return f"eksi {_integer_to_turkish_words(abs(value))}"
+
+    def under_thousand(number: int) -> str:
+        parts: list[str] = []
+        hundreds = number // 100
+        remainder = number % 100
+        if hundreds:
+            if hundreds > 1:
+                parts.append(ones[hundreds])
+            parts.append("yuz")
+        if remainder >= 10:
+            tens_value = (remainder // 10) * 10
+            if tens_value:
+                parts.append(tens[tens_value])
+            remainder = remainder % 10
+        if remainder:
+            parts.append(ones[remainder])
+        return " ".join(parts)
+
+    chunks = [
+        (1_000_000_000, "milyar"),
+        (1_000_000, "milyon"),
+        (1_000, "bin"),
+    ]
+    parts: list[str] = []
+    remaining = value
+    for divisor, label in chunks:
+        chunk = remaining // divisor
+        if not chunk:
+            continue
+        if divisor == 1_000 and chunk == 1:
+            parts.append(label)
+        else:
+            parts.append(f"{under_thousand(chunk)} {label}".strip())
+        remaining %= divisor
+    if remaining:
+        parts.append(under_thousand(remaining))
+    return " ".join(part for part in parts if part).strip()
+
+
+def _format_math_answer_for_user(question: str, result: dict[str, Any]) -> str:
+    formatted = str(result.get("formatted_result") or result.get("result") or "").strip()
+    raw_result = result.get("result")
+    if not formatted:
+        return formatted
+
+    if (
+        _question_prefers_turkish(question)
+        and _question_uses_turkish_number_words(question)
+        and isinstance(raw_result, (int, float))
+        and float(raw_result).is_integer()
+    ):
+        integer_value = int(raw_result)
+        return f"{_integer_to_turkish_words(integer_value)} ({formatted})"
+
+    return formatted
+
+
+def _extract_turkish_word_expression(question: str) -> str | None:
+    normalized = _normalize_turkish_text(question)
+    normalized = re.sub(r"\bisleminin\b|\bislemi\b|\bsonucu\b|\bkactir\b|\bkac\b|\bnedir\b|\bne\b", " ", normalized)
+    normalized = re.sub(r"[?.,!]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return None
+
+    operator_aliases = {
+        "arti": "+",
+        "topla": "+",
+        "eksi": "-",
+        "cikar": "-",
+        "carpi": "*",
+        "kere": "*",
+        "bolu": "/",
+    }
+    operator_pattern = r"\b(" + "|".join(re.escape(key) for key in operator_aliases) + r")\b"
+    parts = re.split(operator_pattern, normalized)
+    if len(parts) < 3:
+        return None
+
+    expression_parts: list[str] = []
+    expect_number = True
+    for part in parts:
+        token = part.strip()
+        if not token:
+            continue
+        if token in operator_aliases:
+            if expect_number or not expression_parts:
+                return None
+            expression_parts.append(operator_aliases[token])
+            expect_number = True
+            continue
+
+        number_value = _parse_turkish_number_phrase(token)
+        if number_value is None:
+            return None
+        expression_parts.append(_format_math_expression_number(number_value))
+        expect_number = False
+
+    if expect_number or len(expression_parts) < 3:
+        return None
+    return "".join(expression_parts)
+
+
 def _extract_arithmetic_expression(question: str) -> str | None:
     normalized = (
         (question or "")
@@ -495,7 +704,7 @@ def _extract_arithmetic_expression(question: str) -> str | None:
         if re.search(r"\d", candidate) and re.search(r"[+\-*/]", candidate)
     ]
     if not candidates:
-        return None
+        return _extract_turkish_word_expression(question)
     return max(candidates, key=len).strip()
 
 
@@ -512,7 +721,7 @@ def _direct_math_tool_result(question: str) -> dict[str, Any] | None:
         )
         if result.get("ok"):
             return {
-                "answer": str(result.get("formatted_result") or result.get("result")),
+                "answer": _format_math_answer_for_user(question, result),
                 "tool_event": {
                     "tool_name": "python_math_tool",
                     "normalized_arguments": {
@@ -563,7 +772,7 @@ def _direct_math_tool_result(question: str) -> dict[str, Any] | None:
         return None
 
     return {
-        "answer": str(result.get("formatted_result") or result.get("result")),
+        "answer": _format_math_answer_for_user(question, result),
         "tool_event": {
             "tool_name": "python_math_tool",
             "normalized_arguments": arguments,
@@ -669,6 +878,58 @@ def _answer_with_math_tool(question: str, route_info: dict[str, Any]) -> dict[st
                 model_name,
                 exc,
             )
+            try:
+                math_result = run_math_tool_via_json_plan(
+                    client=client,
+                    model=model_name,
+                    question=question,
+                )
+                tool_called = bool(math_result.get("tool_called"))
+                tool_events = math_result.get("tool_events", [])
+                answer = (math_result.get("final_answer") or "").strip()
+                if not answer and tool_called and tool_events:
+                    last_tool_result = tool_events[-1].get("tool_result", {})
+                    if last_tool_result.get("ok"):
+                        answer = str(last_tool_result.get("formatted_result") or last_tool_result.get("result") or "").strip()
+
+                if answer:
+                    return {
+                        "question": question,
+                        "answer": answer,
+                        "sources_used": ["math_tool"] if tool_called else [],
+                        "vector_queried_first": False,
+                        "model_used": PUBLIC_MODEL_ID,
+                        "tool_trace": [
+                            {
+                                "order": 1,
+                                "tool": "math_router",
+                                "used": True,
+                                "result_count": 1,
+                                "decision": route_info.get("use_math_tool"),
+                                "reason": route_info.get("reason"),
+                            },
+                            {
+                                "order": 2,
+                                "tool": "math_tool_json_fallback",
+                                "used": True,
+                                "tool_called": tool_called,
+                                "result_count": len(tool_events),
+                                "duration_ms": math_result.get("duration_ms"),
+                                "fallback_after_error": str(exc),
+                            },
+                        ],
+                        "retrieved_chunks": [],
+                        "dp_db_results": [],
+                        "web_sources": [],
+                        "math_tool_trace": tool_events,
+                        "duration_ms": math_result.get("duration_ms"),
+                    }
+            except Exception as fallback_exc:
+                logger.warning(
+                    "orchestrator_math_tool_json_fallback_failed model=%s error=%s",
+                    model_name,
+                    fallback_exc,
+                )
 
     direct_result = _direct_math_tool_result(question)
     if direct_result:
